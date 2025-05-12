@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HoloWellness Chatbot Test</title>
+    <!-- Add Marked.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .chat-container {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            height: 400px;
+            overflow-y: auto;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .user-message {
+            background-color: #e6f7ff;
+            margin-left: 20%;
+            margin-right: 0;
+        }
+        .bot-message {
+            background-color: #f2f2f2;
+            margin-right: 20%;
+            margin-left: 0;
+        }
+        .thinking {
+            background-color: #f9f9f9;
+            font-family: monospace;
+            font-size: 12px;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .input-container {
+            display: flex;
+        }
+        #message-input {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            margin-left: 10px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #status {
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .status-ok {
+            background-color: #dff0d8;
+            color: #3c763d;
+        }
+        .status-error {
+            background-color: #f2dede;
+            color: #a94442;
+        }
+        .session-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+        .memory-type {
+            display: flex;
+            align-items: center;
+            margin-top: 10px;
+        }
+        .memory-type label {
+            margin-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>HoloWellness Chatbot Test</h1>
+    
+    <div id="status">Checking API status...</div>
+    
+    <div class="session-info">
+        <div id="session-id">Session ID: None</div>
+        <button id="clear-memory">Clear Memory</button>
+    </div>
+    
+    <div class="chat-container" id="chat-container"></div>
+    
+    <div class="input-container">
+        <input type="text" id="message-input" placeholder="Type your message here..." />
+        <button id="send-button">Send</button>
+    </div>
+    
+    <div class="memory-type">
+        <label for="memory-select">Memory Type:</label>
+        <select id="memory-select">
+            <option value="buffer_window">Buffer Window (Last 5 messages)</option>
+            <option value="buffer">Buffer (All messages)</option>
+            <option value="token_buffer">Token Buffer (Limited by tokens)</option>
+            <option value="summary">Summary (Summarizes conversation)</option>
+        </select>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const chatContainer = document.getElementById('chat-container');
+            const messageInput = document.getElementById('message-input');
+            const sendButton = document.getElementById('send-button');
+            const statusDiv = document.getElementById('status');
+            const sessionIdDiv = document.getElementById('session-id');
+            const clearMemoryButton = document.getElementById('clear-memory');
+            const memorySelect = document.getElementById('memory-select');
+            
+            // Store session ID
+            let sessionId = localStorage.getItem('chatSessionId') || null;
+            
+            if (sessionId) {
+                sessionIdDiv.textContent = `Session ID: ${sessionId}`;
+                // Load previous messages
+                loadChatHistory();
+            }
+            
+            // Check API status
+            fetch('https://f588-140-113-169-2.ngrok-free.app/api/health')
+                .then(response => response.json())
+                .then(data => {
+                    statusDiv.textContent = `API Status: ${data.status} - ${data.message}`;
+                    statusDiv.className = 'status-ok';
+                })
+                .catch(error => {
+                    statusDiv.textContent = `API Error: ${error.message}. Make sure the backend is running on https://f588-140-113-169-2.ngrok-free.app`;
+                    statusDiv.className = 'status-error';
+                });
+            
+            // Load chat history
+            function loadChatHistory() {
+                if (!sessionId) return;
+                
+                fetch(`https://f588-140-113-169-2.ngrok-free.app/api/memory?session_id=${sessionId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        // Clear chat container
+                        chatContainer.innerHTML = '';
+                        
+                        // Add messages to chat
+                        if (data.history && data.history.length > 0) {
+                            data.history.forEach(msg => {
+                                addMessage(msg.content, msg.role === 'user');
+                            });
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error loading chat history:', error);
+                    });
+            }
+            
+            // Send message function
+            function sendMessage() {
+                const message = messageInput.value.trim();
+                if (!message) return;
+                
+                // Add user message to chat
+                addMessage(message, true);
+                messageInput.value = '';
+                
+                // Add thinking indicator
+                const thinkingElement = document.createElement('div');
+                thinkingElement.textContent = 'Thinking...';
+                thinkingElement.id = 'thinking-indicator';
+                thinkingElement.className = 'message bot-message';
+                chatContainer.appendChild(thinkingElement);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+                
+                // Send to API
+                fetch('https://f588-140-113-169-2.ngrok-free.app/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ 
+                        query: message,
+                        session_id: sessionId
+                    })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    // Remove thinking indicator
+                    const thinkingIndicator = document.getElementById('thinking-indicator');
+                    if (thinkingIndicator) {
+                        chatContainer.removeChild(thinkingIndicator);
+                    }
+                    
+                    // Update session ID if provided
+                    if (data.session_id) {
+                        sessionId = data.session_id;
+                        sessionIdDiv.textContent = `Session ID: ${sessionId}`;
+                        localStorage.setItem('chatSessionId', sessionId);
+                    }
+                    
+                    // Add thinking part if available
+                    if (data.thinking) {
+                        const thinkingElement = document.createElement('div');
+                        thinkingElement.textContent = data.thinking;
+                        thinkingElement.className = 'thinking';
+                        chatContainer.appendChild(thinkingElement);
+                    }
+                    
+                    // Add bot response
+                    addMessage(data.response, false);
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    // Remove thinking indicator
+                    const thinkingIndicator = document.getElementById('thinking-indicator');
+                    if (thinkingIndicator) {
+                        chatContainer.removeChild(thinkingIndicator);
+                    }
+                    
+                    // Add error message
+                    const errorElement = document.createElement('div');
+                    errorElement.textContent = `Error: ${error.message}`;
+                    errorElement.className = 'message bot-message';
+                    errorElement.style.color = 'red';
+                    chatContainer.appendChild(errorElement);
+                    chatContainer.scrollTop = chatContainer.scrollHeight;
+                });
+            }
+            
+            // Add message to chat
+            function addMessage(text, isUser) {
+                const messageElement = document.createElement('div');
+                
+                // Render Markdown to HTML using marked.js
+                // Ensure marked library is loaded before calling parse
+                if (typeof marked !== 'undefined') {
+                    messageElement.innerHTML = marked.parse(text);
+                } else {
+                    // Fallback to simple text if marked is not loaded
+                    messageElement.textContent = text;
+                    console.error('marked.js library not loaded.');
+                }
+                
+                messageElement.className = isUser ? 'message user-message' : 'message bot-message';
+                chatContainer.appendChild(messageElement);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+            
+            // Clear memory
+            clearMemoryButton.addEventListener('click', function() {
+                if (!sessionId) return;
+                
+                fetch('https://f588-140-113-169-2.ngrok-free.app/api/memory/clear', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ session_id: sessionId })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // Clear chat container
+                    chatContainer.innerHTML = '';
+                    
+                    // Add system message
+                    const messageElement = document.createElement('div');
+                    messageElement.textContent = 'Memory cleared';
+                    messageElement.className = 'message bot-message';
+                    messageElement.style.backgroundColor = '#d4edda';
+                    chatContainer.appendChild(messageElement);
+                    
+                    // Generate new session ID
+                    sessionId = null;
+                    localStorage.removeItem('chatSessionId');
+                    sessionIdDiv.textContent = 'Session ID: None';
+                })
+                .catch(error => {
+                    console.error('Error clearing memory:', error);
+                });
+            });
+            
+            // Event listeners
+            sendButton.addEventListener('click', sendMessage);
+            messageInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    sendMessage();
+                }
+            });
+        });
+    </script>
+</body>
+</html> 
