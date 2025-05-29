@@ -1,12 +1,7 @@
-<<<<<<< HEAD
 /** @format */
 
 import React from "react";
 import { Trash2, Minimize2 } from "lucide-react";
-=======
-import React from 'react';
-import { Trash2, Minimize2 } from 'lucide-react';
->>>>>>> c6291c265c082be80e28c7ff6363bfe937e1e979
 
 interface ChatHeaderProps {
   userName: string;
@@ -38,35 +33,21 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         </div>
         <div>
           <h3 className="font-semibold">Chat with {userName}</h3>
-<<<<<<< HEAD
           <p className="text-xs opacity-80">
             {isOnline ? "We're online" : "Offline"}
           </p>
-=======
-          <p className="text-xs opacity-80">{isOnline ? "We're online" : "Offline"}</p>
->>>>>>> c6291c265c082be80e28c7ff6363bfe937e1e979
         </div>
       </div>
       <div className="flex items-center space-x-2">
         <button
           onClick={onSettings}
           className="p-2 hover:bg-white/10 rounded-full transition-colors"
-<<<<<<< HEAD
           title="Clear conversation">
-=======
-          title="Clear conversation"
-        >
->>>>>>> c6291c265c082be80e28c7ff6363bfe937e1e979
           <Trash2 className="w-5 h-5" />
         </button>
         <button
           onClick={onMinimize}
-<<<<<<< HEAD
           className="p-2 hover:bg-white/10 rounded-full transition-colors">
-=======
-          className="p-2 hover:bg-white/10 rounded-full transition-colors"
-        >
->>>>>>> c6291c265c082be80e28c7ff6363bfe937e1e979
           <Minimize2 className="w-5 h-5" />
         </button>
       </div>

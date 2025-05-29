@@ -27,17 +27,6 @@ rag = RAGSystem(PDF_DIR)
 
 DEFAULT_CHATBOT_ID = "664123456789abcdef123456"
 
-# class RAGSystem:
-#     def __init__(self, pdf_dir):
-#         self.documents = ["This is a mock document just for testing MongoDB insert."]
-
-#     def generate_answer(self, query, history=None):
-#         return {
-#             "thinking": "Mock thinking...",
-#             "content": f"Echo: {query}"
-#         }
-# rag = RAGSystem(PDF_DIR)
-
 
 @app.route('/', methods=['GET'])
 def index():
