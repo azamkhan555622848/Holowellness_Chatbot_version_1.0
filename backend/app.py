@@ -9,8 +9,7 @@ from memory_manager import memory_manager
 from bson.json_util import dumps
 from bson import ObjectId, errors
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
