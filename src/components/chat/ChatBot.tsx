@@ -51,7 +51,7 @@ export const ChatBot = () => {
       };
       if (sessionId) payload.session_id = sessionId;
 
-      const response = await fetch("http://192.168.1.11:5000/api/chat", {
+      const response = await fetch("http://192.168.1.9:5000/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -112,7 +112,7 @@ export const ChatBot = () => {
     starRating: number
   ) => {
     try {
-      await fetch("http://192.168.1.11:5000/api/chat/rate", {
+      await fetch("http://192.168.1.9:5000/api/chat/rate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message_id: messageId, rating: starRating }),
@@ -134,7 +134,7 @@ export const ChatBot = () => {
     const realForce = typeof force === "boolean" ? force : false;
 
     if (sessionId) {
-      fetch("http://192.168.1.11:5000/api/memory/clear", {
+      fetch("http://192.168.1.9:5000/api/memory/clear", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId }),

@@ -1,6 +1,7 @@
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+import requests
 from rag_qwen import RAGSystem
 import os
 import logging
@@ -8,6 +9,8 @@ import uuid
 from memory_manager import memory_manager
 from bson.json_util import dumps
 from bson import ObjectId, errors
+from sync_rag_pdfs import sync_pdfs_from_s3
+
 
 
 logger = logging.getLogger(__name__)
@@ -210,6 +213,44 @@ def clear_memory():
         'message': f'Memory cleared for session {session_id}'
     })
 
+
+
+@app.route('/api/rag/reindex', methods=['POST'])
+def reindex_rag():
+    try:
+        sync_pdfs_from_s3()
+        rag._ingest_documents()
+
+        # Get all files currently in S3/local after sync
+        local_files = {f for f in os.listdir(PDF_DIR) if f.lower().endswith('.pdf')}
+        
+        # Update status for each RAG file in the database
+        for rag_file in memory_manager.ragfiles_collection.find({}):
+            if rag_file.get("file_name") in local_files:
+                memory_manager.ragfiles_collection.update_one(
+                    {"_id": rag_file["_id"]},
+                    {"$set": {
+                        "ingestion_status": "success",
+                        "ingestion_message": "Ingestion completed successfully.",
+                        "date_modified": datetime.utcnow()
+                    }}
+                )
+            else:
+                memory_manager.ragfiles_collection.update_one(
+                    {"_id": rag_file["_id"]},
+                    {"$set": {
+                        "ingestion_status": "missing",
+                        "ingestion_message": "File not found in local PDFs folder.",
+                        "date_modified": datetime.utcnow()
+                    }}
+                )
+
+        return jsonify({'status': 'ok', 'message': 'PDFs synced & RAG vectorstore rebuilt.'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({'status': 'ok', 'message': 'RAG system is running'})
@@ -218,6 +259,8 @@ def health_check():
 def minimal():
     """Serve the minimal HTML test file"""
     return send_from_directory('static', 'minimal.html')
+
+
 
 if __name__ == '__main__':
     logger.info("Starting Flask server on port 5000")

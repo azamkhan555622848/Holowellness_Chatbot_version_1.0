@@ -43,6 +43,7 @@ class MemoryManager:
         self.mongo_client = MongoClient(mongo_uri)
         self.mongo_db = self.mongo_client["db_holo_wellness"]
         self.chatbot_collection = self.mongo_db["chatbotinteractions"]
+        self.ragfiles_collection = self.mongo_db["ragfiles"]
 
         self.memory_type = memory_type
         self.max_token_limit = max_token_limit
