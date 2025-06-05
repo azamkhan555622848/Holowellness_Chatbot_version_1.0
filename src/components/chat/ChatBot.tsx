@@ -51,11 +51,14 @@ export const ChatBot = () => {
       };
       if (sessionId) payload.session_id = sessionId;
 
-      const response = await fetch("http://192.168.1.9:5000/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const response = await fetch(
+        "https://eefb-140-113-169-2.ngrok-free.app/api/chat",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
 
       clearInterval(intervalId);
       setIsThinking(false);
@@ -112,7 +115,7 @@ export const ChatBot = () => {
     starRating: number
   ) => {
     try {
-      await fetch("http://192.168.1.9:5000/api/chat/rate", {
+      await fetch("https://eefb-140-113-169-2.ngrok-free.app/api/chat/rate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message_id: messageId, rating: starRating }),
@@ -134,7 +137,7 @@ export const ChatBot = () => {
     const realForce = typeof force === "boolean" ? force : false;
 
     if (sessionId) {
-      fetch("http://192.168.1.9:5000/api/memory/clear", {
+      fetch("https://eefb-140-113-169-2.ngrok-free.app/api/memory/clear", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId }),
