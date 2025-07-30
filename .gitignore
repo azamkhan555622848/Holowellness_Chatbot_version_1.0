@@ -1,0 +1,1 @@
+# Python\n__pycache__/\n*.pyc\n.venv/\nbackend/.venv/\nbackend/cache/\n*.pkl\n*.faiss\n\n# Node\nnode_modules/\n\n# Environment\n.env\n\n# Large files\n*.gguf\n*.bin\n*.safetensors\nbackend/pdfs/*.pdf
