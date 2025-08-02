@@ -23,7 +23,13 @@ import logging
 import threading
 import time as time_module
 import re # Import regex module
-import ollama
+# Use OpenRouter API instead of local Ollama
+try:
+    from openrouter_client import ollama
+    print("Using OpenRouter API for LLM calls")
+except ImportError:
+    import ollama
+    print("Using local Ollama (fallback)")
 import easyocr
 from pdf2image import convert_from_path
 import threading

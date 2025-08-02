@@ -5,10 +5,24 @@ import requests
 import os
 import logging
 import uuid
+from dotenv import load_dotenv
 from memory_manager import memory_manager
 from bson.json_util import dumps
 from bson import ObjectId, errors
 from sync_rag_pdfs import sync_pdfs_from_s3
+
+# Load environment variables
+load_dotenv()
+
+# Production configuration
+FLASK_ENV = os.getenv('FLASK_ENV', 'development')
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+
+# Configure logging
+log_level = os.getenv('LOG_LEVEL', 'INFO')
+logging.basicConfig(level=getattr(logging, log_level.upper()))
+logger = logging.getLogger(__name__)
 
 # Import enhanced RAG system with BGE reranking
 try:
@@ -23,11 +37,51 @@ except ImportError as e:
     USE_ENHANCED_RAG = False
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+app.config['SECRET_KEY'] = SECRET_KEY
+app.config['DEBUG'] = DEBUG
+
+# Configure CORS based on environment
+if FLASK_ENV == 'production':
+    cors_origins = os.getenv('CORS_ORIGINS', '').split(',')
+    CORS(app, resources={r"/api/*": {"origins": cors_origins}}, supports_credentials=True)
+    logger.info(f"Production CORS configured for origins: {cors_origins}")
+else:
+    CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+    logger.info("Development CORS configured for all origins")
 
 # Create static directory if it doesn't exist
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
+
+# Health check endpoint for AWS Load Balancer
+@app.route('/health')
+def health_check():
+    try:
+        # Basic health checks
+        checks = {
+            'status': 'healthy',
+            'service': 'holowellness-api',
+            'version': '1.0',
+            'environment': FLASK_ENV,
+            'openrouter_configured': bool(os.getenv('OPENROUTER_API_KEY')),
+            'mongodb_configured': bool(os.getenv('MONGO_URI')),
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        # Test MongoDB connection
+        try:
+            memory_manager.mongo_client.admin.command('ismaster')
+            checks['mongodb_status'] = 'connected'
+        except Exception as e:
+            checks['mongodb_status'] = f'error: {str(e)}'
+            
+        return jsonify(checks), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 500
 
 # Initialize the RAG system (Enhanced or Original)
 PDF_DIR = os.path.join(os.path.dirname(__file__), "pdfs")
