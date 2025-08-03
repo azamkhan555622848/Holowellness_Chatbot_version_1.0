@@ -42,13 +42,18 @@ echo "✅ AWS CLI configured and working"
 # Step 1: Create Key Pair
 echo ""
 echo "🔑 Step 1: Creating SSH Key Pair..."
+
+# Delete existing key pair if it exists (we need to recreate to get the private key)
 if aws ec2 describe-key-pairs --key-names $KEY_NAME --region $REGION &> /dev/null; then
-    echo "   Key pair '$KEY_NAME' already exists"
-else
-    aws ec2 create-key-pair --key-name $KEY_NAME --region $REGION --output text --query 'KeyMaterial' > ${KEY_NAME}.pem
-    chmod 400 ${KEY_NAME}.pem
-    echo "   ✅ Key pair created: ${KEY_NAME}.pem"
+    echo "   Deleting existing key pair '$KEY_NAME'..."
+    aws ec2 delete-key-pair --key-name $KEY_NAME --region $REGION
 fi
+
+# Create new key pair and save private key
+echo "   Creating new key pair..."
+aws ec2 create-key-pair --key-name $KEY_NAME --region $REGION --output text --query 'KeyMaterial' > ${KEY_NAME}.pem
+chmod 400 ${KEY_NAME}.pem
+echo "   ✅ Key pair created: ${KEY_NAME}.pem"
 
 # Step 2: Create Security Group
 echo ""
