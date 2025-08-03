@@ -101,9 +101,15 @@ jobs:
         # Wait for instance to be ready
         sleep 120
         
-        # Create SSH key file
-        echo "${{ secrets.AWS_SSH_PRIVATE_KEY }}" > holowellness-key.pem
+        # Verify SSH key file exists (created by aws-setup.sh)
+        if [ ! -f "holowellness-key.pem" ]; then
+          echo "❌ SSH key file not found! Check aws-setup.sh execution."
+          exit 1
+        fi
+        
+        # Ensure correct permissions on SSH key
         chmod 400 holowellness-key.pem
+        ls -l holowellness-key.pem
         
         # Create deployment script for remote execution
         cat > remote-deploy.sh << 'EOF'
