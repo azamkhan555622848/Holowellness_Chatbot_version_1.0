@@ -131,13 +131,26 @@ jobs:
         
         # Run application deployment (skip repository cloning since we already have the files)
         cd /opt/holowellness
-        chmod +x deploy/deploy-app.sh
         
-        # Skip to Step 2 of deploy-app.sh since we already have the repository files
+        # Debug: Check what files are available
         echo "📦 Step 1: Repository files already available from deployment package ✅"
+        echo "🔍 Debug: Contents of /opt/holowellness:"
+        ls -la
         echo ""
+        
+        # Ensure we're in the right directory
         echo "🐍 Step 2: Setting up Python Environment..."
-        cd backend
+        echo "📁 Current directory: $(pwd)"
+        
+        # Use absolute path to backend directory
+        if [ -d "/opt/holowellness/backend" ]; then
+            cd /opt/holowellness/backend
+            echo "✅ Successfully entered backend directory"
+        else
+            echo "❌ Backend directory not found! Contents:"
+            find /opt/holowellness -type d -name "*backend*" || echo "No backend directory found"
+            exit 1
+        fi
         
         # Create virtual environment
         python3 -m venv venv
