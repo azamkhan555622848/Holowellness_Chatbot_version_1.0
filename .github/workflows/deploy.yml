@@ -1,0 +1,175 @@
+name: Deploy HoloWellness Chatbot to AWS
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION }}
+        
+    - name: Install frontend dependencies
+      run: |
+        npm install
+        
+    - name: Build frontend
+      run: |
+        npm run build
+        
+    - name: Install backend dependencies
+      run: |
+        cd backend
+        pip install -r requirements-prod.txt
+        
+    - name: Create deployment package
+      run: |
+        # Create deployment directory
+        mkdir -p deployment
+        
+        # Copy backend files
+        cp -r backend/* deployment/
+        
+        # Copy built frontend to backend static folder
+        mkdir -p deployment/static
+        cp -r dist/* deployment/static/ 2>/dev/null || echo "No frontend build files found"
+        
+        # Copy deployment scripts
+        cp -r deploy deployment/
+        
+        # Create deployment archive
+        cd deployment
+        tar -czf ../holowellness-deployment.tar.gz .
+        
+    - name: Upload to S3
+      run: |
+        # Create S3 bucket if it doesn't exist
+        aws s3 mb s3://holowellness-deployments-${{ github.run_number }} --region ${{ secrets.AWS_REGION }} || true
+        
+        # Upload deployment package
+        aws s3 cp holowellness-deployment.tar.gz s3://holowellness-deployments-${{ github.run_number }}/
+        
+        echo "DEPLOYMENT_BUCKET=holowellness-deployments-${{ github.run_number }}" >> $GITHUB_ENV
+        
+    - name: Deploy Infrastructure
+      run: |
+        # Make deployment scripts executable
+        chmod +x deploy/*.sh
+        
+        # Set environment variables for deployment
+        export REPO_URL="${{ github.repository }}"
+        export DEPLOYMENT_BUCKET="${{ env.DEPLOYMENT_BUCKET }}"
+        
+        # Run infrastructure setup
+        ./deploy/aws-setup.sh
+        
+    - name: Get Instance Information
+      id: instance-info
+      run: |
+        if [ -f "instance-info.txt" ]; then
+          source instance-info.txt
+          echo "instance-ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
+          echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "key-name=$KEY_NAME" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Deploy Application
+      if: steps.instance-info.outputs.instance-ip != ''
+      run: |
+        # Wait for instance to be ready
+        sleep 120
+        
+        # Create SSH key file
+        echo "${{ secrets.AWS_SSH_PRIVATE_KEY }}" > holowellness-key.pem
+        chmod 400 holowellness-key.pem
+        
+        # Create deployment script for remote execution
+        cat > remote-deploy.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        # Download and extract deployment package
+        aws s3 cp s3://${{ env.DEPLOYMENT_BUCKET }}/holowellness-deployment.tar.gz /tmp/
+        
+        # Extract to application directory
+        sudo mkdir -p /opt/holowellness
+        sudo tar -xzf /tmp/holowellness-deployment.tar.gz -C /opt/holowellness
+        sudo chown -R ubuntu:ubuntu /opt/holowellness
+        
+        # Run application deployment
+        cd /opt/holowellness
+        chmod +x deploy/deploy-app.sh
+        ./deploy/deploy-app.sh
+        EOF
+        
+        # Copy and execute deployment script on remote instance
+        scp -i holowellness-key.pem -o StrictHostKeyChecking=no remote-deploy.sh ubuntu@${{ steps.instance-info.outputs.instance-ip }}:/tmp/
+        ssh -i holowellness-key.pem -o StrictHostKeyChecking=no ubuntu@${{ steps.instance-info.outputs.instance-ip }} "chmod +x /tmp/remote-deploy.sh && /tmp/remote-deploy.sh"
+        
+    - name: Health Check
+      if: steps.instance-info.outputs.instance-ip != ''
+      run: |
+        # Wait for application to start
+        sleep 30
+        
+        # Test health endpoint
+        HEALTH_URL="http://${{ steps.instance-info.outputs.instance-ip }}/health"
+        echo "Testing health endpoint: $HEALTH_URL"
+        
+        for i in {1..10}; do
+          if curl -f $HEALTH_URL; then
+            echo "✅ Health check passed!"
+            break
+          else
+            echo "⏳ Waiting for application to start... (attempt $i/10)"
+            sleep 30
+          fi
+        done
+        
+    - name: Deployment Summary
+      if: steps.instance-info.outputs.instance-ip != ''
+      run: |
+        echo "🎉 Deployment completed successfully!"
+        echo "📍 Instance IP: ${{ steps.instance-info.outputs.instance-ip }}"
+        echo "🔗 Health Check: http://${{ steps.instance-info.outputs.instance-ip }}/health"
+        echo "🤖 API Endpoint: http://${{ steps.instance-info.outputs.instance-ip }}/api/chat"
+        echo "🌐 Application: http://${{ steps.instance-info.outputs.instance-ip }}/"
+        
+        # Save deployment info as artifact
+        cat > deployment-info.txt << EOF
+        Instance IP: ${{ steps.instance-info.outputs.instance-ip }}
+        Instance ID: ${{ steps.instance-info.outputs.instance-id }}
+        Health Check: http://${{ steps.instance-info.outputs.instance-ip }}/health
+        API Endpoint: http://${{ steps.instance-info.outputs.instance-ip }}/api/chat
+        Application URL: http://${{ steps.instance-info.outputs.instance-ip }}/
+        Deployment Time: $(date)
+        EOF
+        
+    - name: Upload deployment info
+      if: steps.instance-info.outputs.instance-ip != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: deployment-info
+        path: deployment-info.txt
