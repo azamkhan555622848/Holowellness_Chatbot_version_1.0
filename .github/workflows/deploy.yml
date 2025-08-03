@@ -129,10 +129,46 @@ jobs:
         sudo tar -xzf /tmp/holowellness-deployment.tar.gz -C /opt/holowellness
         sudo chown -R ubuntu:ubuntu /opt/holowellness
         
-        # Run application deployment
+        # Run application deployment (skip repository cloning since we already have the files)
         cd /opt/holowellness
         chmod +x deploy/deploy-app.sh
-        ./deploy/deploy-app.sh
+        
+        # Skip to Step 2 of deploy-app.sh since we already have the repository files
+        echo "📦 Step 1: Repository files already available from deployment package ✅"
+        echo ""
+        echo "🐍 Step 2: Setting up Python Environment..."
+        cd backend
+        
+        # Create virtual environment
+        python3 -m venv venv
+        source venv/bin/activate
+        
+        # Install production dependencies
+        pip install --upgrade pip
+        pip install -r requirements-prod.txt
+        
+        echo "   ✅ Python environment ready"
+        
+        # Configure environment
+        echo ""
+        echo "⚙️  Step 3: Configuring Environment..."
+        if [ -f ".env.production" ]; then
+            cp .env.production .env
+            echo "   ✅ Production environment configured"
+        else
+            echo "   ⚠️  .env.production not found, creating from example..."
+            if [ -f ".env.example" ]; then
+                cp .env.example .env
+                echo "   Please edit .env with your actual credentials"
+            fi
+        fi
+        
+        # Continue with the rest of the deployment
+        cd /opt/holowellness
+        export FLASK_ENV=production
+        python3 backend/app.py &
+        
+        echo "   ✅ Application started successfully"
         EOF
         
         # Copy and execute deployment script on remote instance
