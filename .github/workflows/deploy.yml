@@ -142,17 +142,10 @@ jobs:
         echo "🐍 Step 2: Setting up Python Environment..."
         echo "📁 Current directory: $(pwd)"
         
-        # Use absolute path to backend directory
-        if [ -d "/opt/holowellness/backend" ]; then
-            cd /opt/holowellness/backend
-            echo "✅ Successfully entered backend directory"
-        else
-            echo "❌ Backend directory not found! Contents:"
-            find /opt/holowellness -type d -name "*backend*" || echo "No backend directory found"
-            exit 1
-        fi
+        # Backend files are directly in /opt/holowellness (not in a backend subdirectory)
+        echo "✅ Backend files found directly in /opt/holowellness"
         
-        # Create virtual environment
+        # Create virtual environment in the main directory
         python3 -m venv venv
         source venv/bin/activate
         
@@ -179,7 +172,21 @@ jobs:
         # Continue with the rest of the deployment
         cd /opt/holowellness
         export FLASK_ENV=production
-        python3 backend/app.py &
+        export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
+        
+        # Start the Flask application (app.py is directly in this directory)
+        python3 app.py &
+        
+        echo "⏳ Waiting for application to start..."
+        sleep 10
+        
+        # Check if application is running
+        if pgrep -f "python3 app.py" > /dev/null; then
+            echo "✅ Flask application started successfully!"
+        else
+            echo "❌ Flask application failed to start"
+            exit 1
+        fi
         
         echo "   ✅ Application started successfully"
         EOF
