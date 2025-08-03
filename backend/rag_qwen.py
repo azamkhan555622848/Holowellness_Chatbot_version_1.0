@@ -23,628 +23,440 @@ import logging
 import threading
 import time as time_module
 import re # Import regex module
+# Use OpenRouter API instead of local Ollama
+try:
+    from openrouter_client import ollama
+    print("Using OpenRouter API for LLM calls")
+except ImportError:
+    import ollama
+    print("Using local Ollama (fallback)")
+import easyocr
+from pdf2image import convert_from_path
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 load_dotenv()
 
 class RAGSystem:
-    def __init__(self, pdf_dir: str):
-        self.pdf_dir = pdf_dir
-        self.chunk_size = 512  # tokens
-        self.chunk_overlap = 50  # tokens
-        self.top_k = 5  # number of chunks to retrieve
-        self.together_api_key = os.getenv("TOGETHER_API_KEY")
-        self.model_name = "deepseek-ai/deepseek-r1-distill-qwen-14b" # Using the specified distilled Qwen model
-        self.cache_file = os.path.join(pdf_dir, "rag_cache.pkl")
+    def __init__(self, pdf_directory=None, model_name="deepseek-r1:14b-qwen-distill-q4_K_M", embeddings_model="all-MiniLM-L6-v2", cache_dir="cache", init_embeddings=True, top_k=5):
+        """
+        Initializes the RAG system with Ollama and OCR capabilities.
+        """
+        self.pdf_directory = pdf_directory or os.path.join(os.path.dirname(__file__), "pdfs")
+        self.model_name = model_name
+        self.translator_model = "llama3f1-medical"  # Translation model
+        self.embeddings_model_name = embeddings_model
+        self.cache_dir = cache_dir
+        os.makedirs(self.cache_dir, exist_ok=True)
+
+        self.chunk_size = 512
+        self.chunk_overlap = 50
+        self.top_k = top_k
+
+        self.vector_cache = os.path.join(self.cache_dir, "vector_index.faiss")
+        self.docs_cache = os.path.join(self.cache_dir, "documents.pkl")
+        self.bm25_cache = os.path.join(self.cache_dir, "bm25_index.pkl")
         
-        if not self.together_api_key:
-            raise ValueError("Missing Together API key in environment variables")
-        
-        # Initialize components
-        # Using BGE-M3 for balanced Chinese/English, requires more memory
-        # self.embedder = SentenceTransformer('BAAI/bge-m3')
-        # Alternatively, use a smaller model if memory is an issue:
-        self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
+        self.embedder = None
+        self.vector_store = None
         self.documents = []
-        self.vector_index = None
         self.bm25_index = None
         
-        # Create indexes
-        self._ingest_documents()
+        # Initialize EasyOCR (lazy loading)
+        self.ocr_reader = None
+        
+        if init_embeddings and self.pdf_directory:
+            self._load_or_create_embeddings()
 
-    def _generate_response(self, prompt: str) -> str:
-        """Generate response using Together AI API"""
-        # Using Together AI endpoint
-        headers = {
-            "Authorization": f"Bearer {self.together_api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                 {"role": "system", "content": "You are an AI assistant that answers questions using the provided context. If you don't know the answer, say so. Cite sources using [Source: filename]."},
-                 {"role": "user", "content": prompt}
-            ],
-            "max_tokens": 3000,
-            "temperature": 0.7,
-            "top_p": 0.95
-        }
-        try:
-            response = requests.post(
-                "https://api.together.xyz/v1/chat/completions",
-                headers=headers,
-                json=payload
-            )
-            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-            return response.json()['choices'][0]['message']['content']
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Together AI API request failed: {str(e)}")
-        except Exception as e:
-             # Catch other potential errors like JSON decoding errors
-            raise Exception(f"An error occurred processing the Together AI response: {str(e)}")
-    
+    def _init_ocr(self):
+        """Initialize OCR reader only when needed"""
+        if self.ocr_reader is None:
+            print("Initializing EasyOCR...")
+            self.ocr_reader = easyocr.Reader(['en'])  # Add more languages if needed: ['en', 'es', 'fr']
+            print("EasyOCR initialized successfully")
+
     def _chunk_text(self, text: str) -> List[str]:
-        """Split text into overlapping chunks"""
         words = text.split()
         chunks = []
         for i in range(0, len(words), self.chunk_size - self.chunk_overlap):
             chunk = ' '.join(words[i:i + self.chunk_size])
             chunks.append(chunk)
         return chunks
-    
+
     def _extract_text_from_pdf(self, file_path: str) -> str:
-        """Extract text from PDF file, using OCR as fallback if needed."""
-        extracted_text = ""
+        """
+        Enhanced PDF text extraction with OCR fallback for image-heavy pages
+        """
+        text = ""
         try:
-            # First, try PyPDF2 for faster extraction from text-based PDFs
+            # First, try regular text extraction with PyPDF2
             with open(file_path, 'rb') as f:
-                try:
-                    pdf = PyPDF2.PdfReader(f)
-                    for page in pdf.pages:
-                        page_text = page.extract_text()
-                        if page_text: # Check if text was extracted
-                            extracted_text += page_text + "\n"
-                except Exception as pypdf_err:
-                    print(f"PyPDF2 failed for {file_path}: {pypdf_err}. Attempting OCR.")
-                    extracted_text = "" # Reset text if PyPDF2 fails
-
-            # If PyPDF2 extracted very little text, assume it's image-based and try OCR
-            # Adjust the threshold as needed based on typical empty page content
-            MIN_TEXT_LENGTH_THRESHOLD = 100 
-            if len(extracted_text.strip()) < MIN_TEXT_LENGTH_THRESHOLD:
-                print(f"Minimal text extracted with PyPDF2 from {file_path}. Attempting OCR...")
-                try:
-                    # Use pytesseract to OCR the entire PDF
-                    # Specify languages needed (e.g., English + Simplified/Traditional Chinese)
-                    ocr_text = pytesseract.image_to_string(file_path, lang='eng+chi_sim+chi_tra')
-                    # Simple check if OCR produced more text than PyPDF2
-                    if len(ocr_text.strip()) > len(extracted_text.strip()):
-                         print(f"OCR successful for {file_path}")
-                         extracted_text = ocr_text
+                pdf = PyPDF2.PdfReader(f)
+                pages_needing_ocr = []
+                
+                for page_num, page in enumerate(pdf.pages):
+                    page_text = page.extract_text()
+                    if page_text and len(page_text.strip()) > 50:  # If substantial text found
+                        text += page_text + "\n"
                     else:
-                         print(f"OCR did not yield more text for {file_path}. Using PyPDF2 result (if any).")
-
-                except pytesseract.TesseractNotFoundError:
-                    print("*********************************************************")
-                    print("ERROR: Tesseract is not installed or not in your PATH.")
-                    print("Please install Tesseract OCR engine for your system.")
-                    print("Example (Ubuntu/Debian): sudo apt install tesseract-ocr")
-                    print("*********************************************************")
-                    # Return whatever PyPDF2 found, or empty string
-                    return extracted_text 
-                except Exception as ocr_err:
-                    print(f"OCR failed for {file_path}: {ocr_err}")
-                    # Fallback to PyPDF2 text if OCR fails
-            
-            return extracted_text
-
+                        # Mark page for OCR if little/no text extracted
+                        pages_needing_ocr.append(page_num)
+                
+                # If we have pages that need OCR
+                if pages_needing_ocr:
+                    print(f"OCR needed for {len(pages_needing_ocr)} pages in {os.path.basename(file_path)}")
+                    ocr_text = self._extract_text_with_ocr(file_path, pages_needing_ocr)
+                    text += ocr_text
+                
         except Exception as e:
-            print(f"Error processing PDF {file_path}: {e}")
-            return "" # Return empty string on failure
-    
+            print(f"Error reading PDF {file_path}: {e}")
+            # If PyPDF2 fails completely, try OCR on the entire document
+            try:
+                print(f"Falling back to OCR for entire document: {os.path.basename(file_path)}")
+                text = self._extract_text_with_ocr(file_path)
+            except Exception as ocr_error:
+                print(f"OCR also failed for {file_path}: {ocr_error}")
+        
+        return text
+
+    def _extract_text_with_ocr(self, file_path: str, specific_pages: List[int] = None) -> str:
+        """
+        Extract text using OCR from PDF pages
+        """
+        try:
+            self._init_ocr()  # Initialize OCR if not already done
+            
+            # Convert PDF pages to images
+            if specific_pages:
+                # Convert only specific pages
+                images = convert_from_path(file_path, first_page=min(specific_pages)+1, 
+                                         last_page=max(specific_pages)+1)
+                # Filter to only the pages we want
+                images = [images[i - min(specific_pages)] for i in specific_pages if i - min(specific_pages) < len(images)]
+            else:
+                # Convert all pages
+                images = convert_from_path(file_path)
+            
+            ocr_text = ""
+            for i, image in enumerate(images):
+                try:
+                    # Use EasyOCR to extract text
+                    results = self.ocr_reader.readtext(np.array(image))
+                    page_text = " ".join([result[1] for result in results])
+                    if page_text.strip():
+                        ocr_text += f"Page {i+1} OCR: {page_text}\n"
+                except Exception as e:
+                    print(f"OCR failed for page {i+1}: {e}")
+                    continue
+            
+            return ocr_text
+            
+        except Exception as e:
+            print(f"OCR extraction failed for {file_path}: {e}")
+            return ""
+
     def _extract_text_from_docx(self, file_path: str) -> str:
-        """Extract text from DOCX file"""
         try:
             doc = docx.Document(file_path)
-            text = ""
-            for para in doc.paragraphs:
-                text += para.text + "\n"
-            return text
+            return "\n".join([para.text for para in doc.paragraphs])
         except Exception as e:
-            print(f"Error extracting text from DOCX {file_path}: {e}")
+            print(f"Error reading DOCX {file_path}: {e}")
             return ""
-    
-    def _extract_text_from_image(self, file_path: str) -> str:
-        """Extract text from image using OCR"""
-        try:
-            image = Image.open(file_path)
-            text = pytesseract.image_to_string(image)
-            return text
-        except Exception as e:
-            print(f"Error extracting text from image {file_path}: {e}")
-            return ""
-    
-    def _process_file(self, file_path: str, source_info: str) -> None:
-        """Process a single file and add chunks to documents"""
-        try:
-            # Get file extension
-            file_ext = os.path.splitext(file_path)[1].lower()
-            
-            if file_ext == '.pdf':
-                # Process PDF file
-                text = self._extract_text_from_pdf(file_path)
-            elif file_ext == '.docx':
-                # Process DOCX file
-                text = self._extract_text_from_docx(file_path)
-            else:
-                print(f"Unsupported file type: {file_ext}")
-                return
-                
-            if not text:
-                print(f"No text extracted from {file_path}")
-                return
-                
-            # Split into chunks
+
+    def _process_file(self, file_path: str, source_info: str):
+        file_ext = os.path.splitext(file_path)[1].lower()
+        text = ""
+        
+        print(f"Processing: {os.path.basename(file_path)}")
+        
+        if file_ext == '.pdf':
+            text = self._extract_text_from_pdf(file_path)
+        elif file_ext == '.docx':
+            text = self._extract_text_from_docx(file_path)
+        
+        if text:
             chunks = self._chunk_text(text)
-            
-            # Add chunks to documents list
             for chunk in chunks:
-                self.documents.append({
-                    'text': chunk,
-                    'source': source_info,
-                    'file': os.path.basename(file_path)
-                })
-                
-        except Exception as e:
-            print(f"Error processing {file_path}: {e}")
-    
-    def _should_rebuild_cache(self) -> bool:
-        """Check if cache needs to be rebuilt based on file modifications"""
-        if not os.path.exists(self.cache_file):
-            return True
-            
-        cache_mtime = os.path.getmtime(self.cache_file)
-        
-        # Check if any document is newer than the cache
-        for root, dirs, files in os.walk(self.pdf_dir):
-            for file in files:
-                file_path = os.path.join(root, file)
-                if os.path.getmtime(file_path) > cache_mtime:
-                    print(f"File {file_path} was modified after cache was created")
-                    return True
-                    
-        return False
-    
+                self.documents.append({'text': chunk, 'source': source_info, 'file': os.path.basename(file_path)})
+            print(f"Extracted {len(chunks)} chunks from {os.path.basename(file_path)}")
+
     def _ingest_documents(self):
-        """Process all documents and create search indexes with caching"""
-        # Try to load from cache if it exists and is up-to-date
-        if os.path.exists(self.cache_file) and not self._should_rebuild_cache():
-            try:
-                print("Loading documents and indexes from cache...")
-                with open(self.cache_file, 'rb') as f:
-                    cache_data = pickle.load(f)
-                    self.documents = cache_data['documents']
-                    self.bm25_index = cache_data['bm25_index']
-                    self.vector_index = cache_data['vector_index']
-                    print(f"Loaded {len(self.documents)} chunks from cache")
-                    return
-            except Exception as e:
-                print(f"Error loading cache: {e}. Rebuilding indexes...")
-        
         print("Processing documents...")
-        
-        # Process main PDF files
-        for filename in os.listdir(self.pdf_dir):
-            file_path = os.path.join(self.pdf_dir, filename)
-            
-            # Skip directories for now
-            if os.path.isdir(file_path):
-                continue
-                
-            if filename.endswith(".pdf"):
-                print(f"Processing main PDF: {filename}")
-                self._process_file(file_path, "Main Reference")
-        
-        # Process case study folders
-        for case_folder in os.listdir(self.pdf_dir):
-            case_dir = os.path.join(self.pdf_dir, case_folder)
-            
-            if os.path.isdir(case_dir) and case_folder.lower().startswith("case"):
-                print(f"Processing case folder: {case_folder}")
-                
-                # Process all files in the case folder
-                for case_file in os.listdir(case_dir):
-                    file_path = os.path.join(case_dir, case_file)
-                    
-                    if os.path.isfile(file_path):
-                        self._process_file(file_path, case_folder)
-        
-        # Process Algorithm_docs directory
-        algorithm_docs_dir = os.path.join(self.pdf_dir, "Algorithm_docs")
-        if os.path.exists(algorithm_docs_dir):
-            print("Processing Algorithm_docs directory...")
-            for filename in os.listdir(algorithm_docs_dir):
-                file_path = os.path.join(algorithm_docs_dir, filename)
-                if os.path.isfile(file_path):
-                    print(f"Processing algorithm document: {filename}")
-                    self._process_file(file_path, "Algorithm_docs")
-
-        # Process trigger point directory
-        trigger_point_dir = os.path.join(self.pdf_dir, "trigger point")
-        if os.path.exists(trigger_point_dir):
-            print("Processing trigger point directory...")
-            for filename in os.listdir(trigger_point_dir):
-                file_path = os.path.join(trigger_point_dir, filename)
-                if os.path.isfile(file_path):
-                    print(f"Processing trigger point document: {filename}")
-                    self._process_file(file_path, "trigger point")
-        
-        if not self.documents:
-            print("Warning: No documents were processed. Check file paths and formats.")
-            return
-            
-        print(f"Processed {len(self.documents)} chunks from all documents")
-        
-        # Create BM25 index
-        tokenized_docs = [doc["text"].split() for doc in self.documents]
-        self.bm25_index = BM25Okapi(tokenized_docs)
-        
-        # Create FAISS vector index with batch processing
-        # Process in batches to avoid memory issues with large embedders like bge-m3
-        batch_size = 8  # Reduced batch size further
-        num_batches = (len(self.documents) + batch_size - 1) // batch_size
-        print(f"Creating vector index with batch processing (size {batch_size})...")
-
-        # Process first batch to initialize the index
-        first_batch_docs = self.documents[:batch_size]
-        first_embeddings = self.embedder.encode([doc['text'] for doc in first_batch_docs], normalize_embeddings=True) # Normalize for IP index
-        
-        # Ensure embeddings are float32
-        first_embeddings = np.array(first_embeddings).astype('float32')
-        
-        # Get embedding dimension
-        if len(first_embeddings) == 0:
-            print("Warning: No documents to index.")
-            self.vector_index = None
-            return # Exit if no documents
-            
-        d = first_embeddings.shape[1]
-        # Use IndexFlatIP for cosine similarity with normalized embeddings
-        self.vector_index = faiss.IndexFlatIP(d) 
-        self.vector_index.add(first_embeddings)
-
-        # Process remaining batches
-        for i in range(1, num_batches):
-            start_idx = i * batch_size
-            end_idx = min((i + 1) * batch_size, len(self.documents))
-            batch_docs = self.documents[start_idx:end_idx]
-            if not batch_docs: # Skip empty batches
-                continue
-                
-            print(f"Processing batch {i+1}/{num_batches} ({len(batch_docs)} documents)")
-            batch_embeddings = self.embedder.encode([doc['text'] for doc in batch_docs], normalize_embeddings=True)
-            batch_embeddings = np.array(batch_embeddings).astype('float32')
-            self.vector_index.add(batch_embeddings)
-            # Optional: Add a small delay or clear cache if memory pressure is extreme
-            # import gc
-            # gc.collect()
-            # torch.cuda.empty_cache() # If using PyTorch backend explicitly
-            # time.sleep(0.1)
-            
-        print(f"FAISS index created with {self.vector_index.ntotal} vectors.")
-        
-        # Save to cache
-        try:
-            print("Saving documents and indexes to cache...")
-            with open(self.cache_file, 'wb') as f:
-                pickle.dump({
-                    'documents': self.documents,
-                    'bm25_index': self.bm25_index,
-                    'vector_index': self.vector_index
-                }, f)
-            print("Cache saved successfully")
-        except Exception as e:
-            print(f"Error saving cache: {e}")
+        for root, _, files in os.walk(self.pdf_directory):
+            for file in files:
+                self._process_file(os.path.join(root, file), os.path.basename(root))
 
     def _format_context(self, chunks: List[Dict[str, Any]]) -> str:
-        """Format the retrieved chunks into a context string for the LLM"""
+        """
+        Formats the retrieved chunks into a readable context string.
+        Limits context size to prevent model hanging.
+        """
+        if not chunks:
+            return "No relevant documents found."
+        
         formatted_chunks = []
+        total_length = 0
+        max_context_length = 20000  # Increased to match Enhanced RAG
+        
         for chunk in chunks:
-            # Include source and file information
-            formatted_chunks.append(f"Source: {chunk['file']} ({chunk['source']})\n{chunk['text']}")
+            # Keep chunk size at 800 characters for good balance
+            chunk_text = chunk['text'][:800] + "..." if len(chunk['text']) > 800 else chunk['text']
+            formatted_chunk = f"Source: {chunk['file']} ({chunk['source']})\n{chunk_text}"
+            
+            if total_length + len(formatted_chunk) > max_context_length:
+                break
+                
+            formatted_chunks.append(formatted_chunk)
+            total_length += len(formatted_chunk)
         
         return "\n\n".join(formatted_chunks)
 
     def _hybrid_search(self, query: str) -> List[Dict[str, Any]]:
-        """Perform hybrid search and return top chunks"""
-        if not self.documents or self.vector_index is None or self.bm25_index is None:
-            print("Warning: Documents not indexed or indexes not created. Search will return empty results.")
-            return []
+        """
+        Performs a hybrid search using both BM25 and FAISS.
+        """
+        # Vector search (FAISS)
+        query_embedding = self.embedder.encode([query])
+        D, I = self.vector_store.search(np.array(query_embedding, dtype=np.float32), k=self.top_k)
+        vector_results_indices = I[0]
+
+        # Keyword search (BM25)
+        tokenized_query = query.split(" ")
+        bm25_scores = self.bm25_index.get_scores(tokenized_query)
+        bm25_top_n_indices = np.argsort(bm25_scores)[::-1][:self.top_k]
+
+        # Combine results
+        combined_indices = list(set(vector_results_indices) | set(bm25_top_n_indices))
+        
+        final_ids = combined_indices[:self.top_k]
+        return [self.documents[i] for i in final_ids if i < len(self.documents)]
+
+    def _translate_to_traditional_chinese(self, english_content: str) -> str:
+        """Translate English medical response to Traditional Chinese using llama3f1-medical model."""
+        translation_prompt = f"""請將以下英文醫療建議翻譯成繁體中文。保持專業的醫療語調，並確保翻譯準確且易於理解：
+
+原文：
+{english_content}
+
+繁體中文翻譯："""
 
         try:
-            # Vector search
-            # Ensure query embedding is correctly shaped and typed
-            query_embedding = self.embedder.encode([query], normalize_embeddings=True)[0] # Normalize for IP index
-            vector_query = np.array([query_embedding]).astype('float32')
+            def call_translator():
+                return ollama.chat(
+                    model=self.translator_model,
+                    messages=[{"role": "user", "content": translation_prompt}],
+                    options={
+                        "temperature": 0.1,  # Lower temperature for consistent translation
+                        "top_p": 0.7,
+                        "num_predict": 400  # Limit translation length
+                    }
+                )
             
-            # Check if vector_index exists and has vectors
-            if self.vector_index is None or self.vector_index.ntotal == 0:
-                 print("Warning: FAISS index is not initialized or empty.")
-                 vector_ids = [[]] # Return empty list of lists to match expected format
-            else:
-                 _, vector_ids = self.vector_index.search(vector_query, self.top_k * 2)
-            
-            # BM25 search
-            tokenized_query = query.split()
-            bm25_scores = self.bm25_index.get_scores(tokenized_query)
-            # Get indices sorted by score, descending
-            bm25_ids = np.argsort(bm25_scores)[::-1][:self.top_k * 2]
-            
-            # Combine and deduplicate results using a set for efficiency
-            # Ensure vector_ids[0] is handled correctly, could be empty
-            v_ids = vector_ids[0].tolist() if len(vector_ids) > 0 and len(vector_ids[0]) > 0 else []
-            b_ids = bm25_ids.tolist()
-            combined_ids = set(v_ids + b_ids)
-
-            # Score combined results for ranking (example: simple weighted sum)
-            # Note: This scoring needs refinement for optimal hybrid results
-            # We need the actual vector embeddings of the documents for cosine similarity
-            # Storing embeddings alongside documents or re-calculating is needed
-            # For now, using a simplified rank based on BM25 and presence in vector results
-
-            scored_results = []
-            for doc_id in combined_ids:
-                # Check if doc_id is valid
-                if 0 <= doc_id < len(self.documents):
-                    bm25_score = bm25_scores[doc_id]
-                    # Placeholder for vector score - requires access to document embeddings
-                    # vector_score = np.dot(query_embedding, self.doc_embeddings[doc_id]) # Example if embeddings are stored
-                    vector_score = 1.0 if doc_id in v_ids else 0.0 # Simple presence check
-                    
-                    # Combine scores (adjust weights as needed)
-                    combined_score = 0.6 * bm25_score + 0.4 * vector_score
-                    scored_results.append((doc_id, combined_score))
-                else:
-                     print(f"Warning: Invalid document ID {doc_id} encountered during hybrid search.")
-
-
-            # Sort by combined score, descending
-            sorted_results = sorted(scored_results, key=lambda x: x[1], reverse=True)
-            
-            # Get the final top_k document indices
-            final_ids = [doc_id for doc_id, score in sorted_results[:self.top_k]]
-
-            # Retrieve the actual document chunks
-            return [self.documents[i] for i in final_ids]
-
+            # Use ThreadPoolExecutor for timeout
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(call_translator)
+                response = future.result(timeout=60)  # 60 second timeout
+                translated_content = response.get('message', {}).get('content', '').strip()
+                print(f"Translation complete: {len(translated_content)} characters")
+                return translated_content
+                
+        except FutureTimeoutError as e:
+            print(f"Translation timeout: {e}")
+            return f"翻譯逾時：{english_content[:200]}..."  # Fallback: return truncated original
         except Exception as e:
-            print(f"Error during hybrid search:\n{e}") # Print full exception
-            import traceback
-            traceback.print_exc() # Print traceback for detailed debugging
-            return [] # Return empty list on error
+            print(f"Translation error: {e}")
+            return f"翻譯錯誤：{english_content}"  # Fallback: return original with error note
 
-    def generate_answer(self, query: str, conversation_history: List[Dict[str, str]] = None) -> Dict[str, str]:
-        """Generate an answer using RAG (English), falling back to general knowledge."""
+    def generate_answer(self, query: str, conversation_history: List[Dict[str, str]] = None, override_context: str = None, override_thinking: str = None) -> Dict[str, str]:
+        """
+        Generates an answer using two-step pipeline: 
+        1. deepseek-r1 for medical content generation (English)
+        2. llama3f1-medical for Traditional Chinese translation
+        """
         start_time = time.time()
-
-        try:
-            relevant_chunks = self._hybrid_search(query)
-        except Exception as search_err:
-            print(f"Hybrid search failed unexpectedly: {search_err}")
-            relevant_chunks = [] # Treat search failure as no relevant chunks found
-
-        # Generate internal thinking string (for logging)
-        internal_thinking = ""
-        context = "" # Initialize context
-
-        if relevant_chunks:
-            context = self._format_context(relevant_chunks)
-            for i, chunk in enumerate(relevant_chunks): # Use limited number for thinking log
-                internal_thinking += f"[Chunk {i+1} - {chunk['source']} - {chunk['file']}]\n"
-                excerpt = chunk['text'][:300] + "..." if len(chunk['text']) > 300 else chunk['text']
-                internal_thinking += excerpt + "\n\n"
-            internal_thinking += "\nAnalysis:\n"
-            internal_thinking += f"User query: '{query}'. Retrieved {len(relevant_chunks)} relevant chunks. Constructing answer using Together AI with context."
+        
+        if override_context is not None:
+            context = override_context
+            internal_thinking = override_thinking if override_thinking else ""
+            relevant_chunks = [] 
         else:
-            # Even if no chunks found or search failed, proceed to LLM
-            context = "No specific context found."
-            internal_thinking = f"No relevant information found in the knowledge base for query: '{query}'. Attempting to answer using general knowledge."
+            relevant_chunks = self._hybrid_search(query)
+            context = self._format_context(relevant_chunks)
+            internal_thinking = f"RAG Analysis:\nQuery: '{query}'\n"
+            internal_thinking += f"Found {len(relevant_chunks)} relevant chunks.\n"
 
-        # --- Call the LLM --- 
-        # Prepare conversation history 
-        formatted_history = []
-        if conversation_history:
-            # Use only recent history to fit context window
-            recent_history = conversation_history[-6:] # Limit history length
-            for message in recent_history:
-                # Ensure role and content exist
-                if 'role' in message and 'content' in message:
-                        formatted_history.append({"role": message['role'], "content": message['content']})
+        # Build conversation context if available
+        conversation_context = ""
+        if conversation_history and len(conversation_history) > 0:
+            conversation_context = "\n\nPrevious conversation context:\n"
+            # Include last 3-4 exchanges to maintain context without overwhelming the prompt
+            recent_history = conversation_history[-6:] if len(conversation_history) > 6 else conversation_history
+            for msg in recent_history:
+                role = "Patient" if msg.get('role') == 'user' else "Dr. HoloWellness"
+                conversation_context += f"{role}: {msg.get('content', '')}\n"
 
-        # Updated System Prompt for allowing general knowledge but keeping constraints
-        system_prompt = f"""# SYSTEM
-You are HoloWellness, an AI assistant simulating a professional human doctor. Your goal is to provide **extremely concise and brief** advice.
+        system_prompt = f"""You are Dr. HoloWellness, a sports medicine doctor speaking to your patient. 
 
-- Use the CONTEXT below to answer the user's question if relevant information is available. Limit your response to **a few key sentences** summarizing the most critical points from the context.
-- If the CONTEXT doesn't help, answer the question briefly based on your general medical knowledge.
-- **Format answers using Markdown** (e.g., bullet points for clarity).
-- Cite sources using [Source: filename] *only* if the information comes **directly** from the CONTEXT.
-- After the brief answer, suggest **one relevant follow-up question** if appropriate.
+Medical information: {context}{conversation_context}
 
-CONTEXT:
-{context}
+Example:
+Patient: "I have shoulder pain when lifting my arm"
+Dr. HoloWellness: "It sounds like you may have rotator cuff irritation or impingement. I recommend starting with ice for 15-20 minutes several times daily and avoiding overhead activities for a few days. Have you noticed if the pain is worse at night or when reaching behind your back?"
 
-Please answer the user's question, keeping it brief and professional, and suggest a follow-up question."""
+Now respond to your patient in the same natural, caring way. Give your assessment, two recommendations, and ask one follow-up question."""
 
+        # Build messages with conversation history for better context
         messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(formatted_history)
+        
+        # Add recent conversation history (last 2-3 exchanges) directly to messages
+        if conversation_history and len(conversation_history) > 0:
+            # Get last few exchanges, ensuring we don't exceed context limits
+            recent_messages = conversation_history[-4:] if len(conversation_history) > 4 else conversation_history
+            for msg in recent_messages:
+                if msg.get('content'):
+                    messages.append({
+                        "role": msg.get('role', 'user'),
+                        "content": msg.get('content', '')
+                    })
+        
+        # Add current query with empty CoT to prevent thinking tokens (official DeepSeek method)
         messages.append({"role": "user", "content": query})
+        messages.append({"role": "assistant", "content": "<think>\n\n</think>\n\n"})
 
+        print("\n--- Step 1: Generating English Response with DeepSeek ---")
+        print(f"Context length: {len(context)} characters")
+        print(f"Query: {query}")
+        
         try:
-            headers = {
-                "Authorization": f"Bearer {self.together_api_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": self.model_name,
-                "messages": messages,
-                "max_tokens": 1024, # Reduced max_tokens for brevity
-                "temperature": 0.5, # Lower temperature for more focused response
-                "top_p": 0.9
-            }
-            response = requests.post(
-                "https://api.together.xyz/v1/chat/completions",
-                headers=headers,
-                json=payload
-            )
+            # Step 1: Generate English response with deepseek-r1
+            print("Calling DeepSeek model...")
+            
+            def call_ollama():
+                return ollama.chat(
+                    model=self.model_name,
+                    messages=messages,
+                    options={
+                        "temperature": 0.4,  # Slightly more creative for natural responses
+                        "top_p": 0.8,        # Allow more response variety
+                        "num_predict": 300,  # Shorter to prevent long thinking
+                        "stop": ["<think>", "Patient:", "Dr. HoloWellness:", "\n\n\n"]
+                    }
+                )
+            
+            # Use ThreadPoolExecutor for timeout
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(call_ollama)
+                response = future.result(timeout=90)  # Longer timeout for complete responses
+                english_content = response.get('message', {}).get('content', '').strip()
+                
+                # Robust thinking token removal
+                import re
+                
+                # Remove complete thinking blocks
+                english_content = re.sub(r'<think>.*?</think>', '', english_content, flags=re.DOTALL)
+                
+                # Remove incomplete thinking blocks (everything after <think> if no closing tag)
+                if '<think>' in english_content:
+                    english_content = english_content.split('<think>')[0].strip()
+                
+                # Remove any remaining standalone tags
+                english_content = re.sub(r'</?think>', '', english_content)
+                english_content = english_content.strip()
+                
+                print(f"English Response: {english_content}")
+                internal_thinking += f"\nEnglish Response: {english_content}"
+            
+            # Step 2: Translate to Traditional Chinese
+            print("\n--- Step 2: Translating to Traditional Chinese ---")
+            translated_content = self._translate_to_traditional_chinese(english_content)
+            internal_thinking += f"\nTranslated Content: {translated_content}"
 
-            if response.status_code != 200:
-                error_text = response.text
-                print(f"Error from TogetherAI API ({response.status_code}): {error_text}")
-                generated_content = f"Error generating response. API returned status code {response.status_code}."
-                internal_thinking += f"\nAPI Error ({response.status_code}): {error_text}"
-            else:
-                response_data = response.json()
-                # Check for potential errors or empty choices in the response
-                if 'choices' in response_data and response_data['choices'] and 'message' in response_data['choices'][0] and 'content' in response_data['choices'][0]['message']:
-                        raw_content = response_data['choices'][0]['message']['content'].strip()
-                        # Remove potential internal thoughts if the model adds them (e.g., <think>...</think>)
-                        generated_content = re.sub(r"<think>.*?</think>\s*", "", raw_content, flags=re.DOTALL).strip()
-                        internal_thinking += f"\nLLM Raw Response: {raw_content}" # Log raw response
-                else:
-                        print(f"Unexpected response structure from TogetherAI: {response_data}")
-                        generated_content = "Error: Received an unexpected response structure from the AI service."
-                        internal_thinking += f"\nAPI Response Error: Unexpected structure {response_data}"
-
-
-        except requests.exceptions.RequestException as req_e:
-            print(f"Network error calling TogetherAI API: {req_e}")
-            generated_content = f"I encountered a network error trying to reach the AI service: {str(req_e)}"
-            internal_thinking += f"\nNetwork Error calling TogetherAI: {str(req_e)}"
+        except FutureTimeoutError as e:
+            error_message = f"Model timeout: {e}"
+            print(error_message)
+            translated_content = f"抱歉，AI模型回應時間過長，請稍後重試。"
+            internal_thinking += f"\nTimeout Error: {e}"
         except Exception as e:
-            print(f"Error processing TogetherAI response: {e}")
-            generated_content = f"I encountered an error while processing the AI response: {str(e)}"
-            internal_thinking += f"\nError processing TogetherAI response: {str(e)}"
-
-        # --- Return generated content --- 
+            error_message = f"Error communicating with Ollama: {e}"
+            print(error_message)
+            translated_content = f"抱歉，我在連接AI模型時遇到錯誤：{e}"
+            internal_thinking += f"\nOllama Error: {e}"
+        
+        print("--- Two-Step Pipeline Complete ---\n")
         total_time = time.time() - start_time
-        print(f"Answer generated in {total_time:.2f} seconds")
-        print(f"Internal Thinking Process:\n{internal_thinking}")
+        logging.info(f"Answer generated in {total_time:.2f} seconds")
 
         return {
             "thinking": internal_thinking,
-            "content": generated_content
+            "content": translated_content,
+            "sources": relevant_chunks
         }
 
+    def _load_or_create_embeddings(self):
+        """
+        Loads embeddings and indices from cache if they exist,
+        otherwise creates them from the source documents.
+        """
+        self.embedder = SentenceTransformer(self.embeddings_model_name)
+
+        if os.path.exists(self.docs_cache) and os.path.exists(self.bm25_cache) and os.path.exists(self.vector_cache):
+            print("Loading embeddings and indices from cache...")
+            with open(self.docs_cache, 'rb') as f:
+                self.documents = pickle.load(f)
+            with open(self.bm25_cache, 'rb') as f:
+                self.bm25_index = pickle.load(f)
+            self.vector_store = faiss.read_index(self.vector_cache)
+            print(f"Loaded {len(self.documents)} documents from cache.")
+        else:
+            print("No cache found. Creating new embeddings and indices...")
+            self._ingest_documents()
+            self._save_embeddings()
+
+    def _save_embeddings(self):
+        """
+        Creates and saves the embeddings and indices to the cache directory.
+        """
+        print("Saving embeddings and indices to cache...")
+        
+        embeddings = self.embedder.encode([doc['text'] for doc in self.documents])
+        embeddings_np = np.array(embeddings, dtype=np.float32)
+        
+        self.vector_store = faiss.IndexFlatL2(embeddings_np.shape[1])
+        self.vector_store.add(embeddings_np)
+        faiss.write_index(self.vector_store, self.vector_cache)
+
+        tokenized_corpus = [doc['text'].split(" ") for doc in self.documents]
+        self.bm25_index = BM25Okapi(tokenized_corpus)
+        with open(self.bm25_cache, 'wb') as f:
+            pickle.dump(self.bm25_index, f)
+
+        with open(self.docs_cache, 'wb') as f:
+            pickle.dump(self.documents, f)
+            
+        print(f"Saved {len(self.documents)} documents and their indices to cache.")
+
 if __name__ == "__main__":
-    # Configuration
-    PDF_DIR = os.path.join(os.path.dirname(__file__), "pdfs")  # Update this path as needed
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    PDF_DIR = os.path.join(os.path.dirname(__file__), "pdfs")
     
-    # Initialize system with PDF directory; model is loaded from environment variables
-    rag = RAGSystem(PDF_DIR)
-    
-    # Interactive loop
-    while True:
-        query = input("\nEnter your question (or 'quit' to exit): ").strip()
-        if query.lower() in {"quit", "exit"}:
-            break
+    try:
+        rag = RAGSystem(PDF_DIR)
         
-        # Get response with thinking and content
-        response = rag.generate_answer(query)
-        
-        # Print thinking if requested
-        print("\n--- Thinking Process (Internal) ---")
-        print(response["thinking"])
-        print("\n--- Response (Displayed to User) ---")
-        print(response["content"])
-
-# Store conversation sessions
-conversations = {}
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-
-# Session cleanup settings
-SESSION_TIMEOUT = 60 * 60  # 1 hour in seconds
-MAX_SESSIONS = 100  # Maximum number of sessions to keep
-
-def cleanup_sessions():
-    """Remove old sessions to prevent memory leaks"""
-    while True:
-        try:
-            current_time = datetime.now()
-            sessions_to_remove = []
-
-            # Iterate over a copy of keys to allow deletion during iteration
-            session_ids = list(conversations.keys())
-
-            for session_id in session_ids:
-                # Check if session still exists before accessing
-                if session_id not in conversations:
-                    continue
-
-                messages = conversations[session_id]
-                if not messages:
-                    # Potentially remove empty sessions immediately or after a shorter timeout
-                    # sessions_to_remove.append(session_id)
-                    continue
-
-                try:
-                    # Ensure timestamp exists and is valid ISO format
-                    if 'timestamp' in messages[-1]:
-                         last_message_time = datetime.fromisoformat(messages[-1]['timestamp'])
-                         if (current_time - last_message_time).total_seconds() > SESSION_TIMEOUT:
-                             sessions_to_remove.append(session_id)
-                    else:
-                         # Handle missing timestamp - maybe remove immediately or log warning
-                         logger.warning(f"Session {session_id} last message missing timestamp.")
-                         # sessions_to_remove.append(session_id) # Option: remove if timestamp is missing
-
-                except (ValueError, TypeError) as time_err:
-                    logger.error(f"Error parsing timestamp for session {session_id}: {time_err}. Message: {messages[-1]}")
-                    # Decide how to handle invalid timestamps (e.g., remove session)
-                    # sessions_to_remove.append(session_id)
-
-            # Remove expired/problematic sessions
-            for session_id in sessions_to_remove:
-                 # Check if session still exists before deleting
-                 if session_id in conversations:
-                     logger.info(f"Removing expired/problematic session: {session_id}")
-                     del conversations[session_id]
-
-            # If we still have too many sessions, remove oldest ones
-            if len(conversations) > MAX_SESSIONS:
-                # Sort sessions by last message time (handle missing/invalid timestamps)
-                def get_session_time(item):
-                    session_id, messages = item
-                    if messages and 'timestamp' in messages[-1]:
-                        try:
-                            return datetime.fromisoformat(messages[-1]['timestamp'])
-                        except (ValueError, TypeError):
-                            return datetime.min # Treat invalid timestamps as very old
-                    return datetime.min # Treat empty or timestamp-less sessions as very old
-
-                # Sort items safely
-                sorted_sessions = sorted(conversations.items(), key=get_session_time)
-
-                # Remove oldest sessions
-                num_to_remove = len(conversations) - MAX_SESSIONS
-                for session_id, _ in sorted_sessions[:num_to_remove]:
-                     # Check if session still exists before deleting
-                     if session_id in conversations:
-                         logger.info(f"Removing old session due to limit: {session_id}")
-                         del conversations[session_id]
-
-        except Exception as e:
-            # Log general errors in the cleanup loop
-            logger.error(f"Error in session cleanup loop: {e}", exc_info=True)
-
-        # Sleep for 10 minutes
-        time_module.sleep(600)
-
-
-# Start cleanup thread
-cleanup_thread = threading.Thread(target=cleanup_sessions, daemon=True)
-cleanup_thread.start()
-
-# Create static directory if it doesn't exist 
+        while True:
+            query = input("\nEnter your question (or 'quit' to exit): ").strip()
+            if query.lower() in {"quit", "exit"}:
+                break
+            
+            response = rag.generate_answer(query)
+            
+            print("\n--- Thinking Process ---")
+            print(response["thinking"])
+            print("\n--- Final Answer ---")
+            print(response["content"])
+            if response.get('sources'):
+                print("\n--- Sources ---")
+                for source in response['sources']:
+                    print(f"- {source['file']}")
+                    
+    except Exception as e:
+        logging.error(f"An error occurred: {e}", exc_info=True) 

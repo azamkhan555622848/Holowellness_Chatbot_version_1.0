@@ -2,31 +2,99 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import requests
-from rag_qwen import RAGSystem
 import os
 import logging
 import uuid
+from dotenv import load_dotenv
 from memory_manager import memory_manager
 from bson.json_util import dumps
 from bson import ObjectId, errors
 from sync_rag_pdfs import sync_pdfs_from_s3
 
+# Load environment variables
+load_dotenv()
 
+# Production configuration
+FLASK_ENV = os.getenv('FLASK_ENV', 'development')
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 
+# Configure logging
+log_level = os.getenv('LOG_LEVEL', 'INFO')
+logging.basicConfig(level=getattr(logging, log_level.upper()))
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+# Import enhanced RAG system with BGE reranking
+try:
+    from enhanced_rag_qwen import EnhancedRAGSystem
+    USE_ENHANCED_RAG = True
+    logger = logging.getLogger(__name__)
+    logger.info("Enhanced RAG system with BGE reranking is available")
+except ImportError as e:
+    logger = logging.getLogger(__name__)
+    logger.warning(f"Enhanced RAG system not available: {e}. Falling back to original RAG system")
+    from rag_qwen import RAGSystem
+    USE_ENHANCED_RAG = False
 
+app = Flask(__name__)
+app.config['SECRET_KEY'] = SECRET_KEY
+app.config['DEBUG'] = DEBUG
+
+# Configure CORS based on environment
+if FLASK_ENV == 'production':
+    cors_origins = os.getenv('CORS_ORIGINS', '').split(',')
+    CORS(app, resources={r"/api/*": {"origins": cors_origins}}, supports_credentials=True)
+    logger.info(f"Production CORS configured for origins: {cors_origins}")
+else:
+    CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+    logger.info("Development CORS configured for all origins")
 
 # Create static directory if it doesn't exist
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(static_dir, exist_ok=True)
 
-# Initialize the RAG system
-PDF_DIR = os.path.join(os.path.dirname(__file__), "pdfs")  # Update this path as needed
+# Health check endpoint for AWS Load Balancer
+@app.route('/health')
+def health_check():
+    try:
+        # Basic health checks
+        checks = {
+            'status': 'healthy',
+            'service': 'holowellness-api',
+            'version': '1.0',
+            'environment': FLASK_ENV,
+            'openrouter_configured': bool(os.getenv('OPENROUTER_API_KEY')),
+            'mongodb_configured': bool(os.getenv('MONGO_URI')),
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        # Test MongoDB connection
+        try:
+            memory_manager.mongo_client.admin.command('ismaster')
+            checks['mongodb_status'] = 'connected'
+        except Exception as e:
+            checks['mongodb_status'] = f'error: {str(e)}'
+            
+        return jsonify(checks), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 500
+
+# Initialize the RAG system (Enhanced or Original)
+PDF_DIR = os.path.join(os.path.dirname(__file__), "pdfs")
 logger.info(f"Initializing RAG system with documents from: {PDF_DIR}")
-rag = RAGSystem(PDF_DIR)
+
+if USE_ENHANCED_RAG:
+    # Use enhanced RAG with BGE reranking
+    rag = EnhancedRAGSystem(pdf_dir=PDF_DIR)
+    logger.info("✅ Enhanced RAG system with BGE reranking initialized successfully")
+else:
+    # Fall back to original RAG system
+    rag = RAGSystem(PDF_DIR)
+    logger.info("⚠️ Using original RAG system (no reranking)")
 
 DEFAULT_CHATBOT_ID = "664123456789abcdef123456"
 
@@ -39,14 +107,28 @@ def index():
 @app.route('/api', methods=['GET'])
 def api_info():
     """Root route for status check and basic instructions"""
+    enhanced_info = ""
+    if USE_ENHANCED_RAG and hasattr(rag, 'reranker') and rag.reranker:
+        enhanced_info = " with BGE Reranking (Two-Stage Retrieval)"
+    elif USE_ENHANCED_RAG:
+        enhanced_info = " (Enhanced RAG - Reranker Loading)"
+    
     return jsonify({
         'status': 'ok',
-        'message': 'HoloWellness Chatbot API is running with DeepSeek-R1-Distill-Qwen-14B',
+        'message': f'HoloWellness Chatbot API is running with DeepSeek-R1-Distill-Qwen-14B{enhanced_info}',
+        'rag_system': {
+            'type': 'Enhanced RAG with BGE Reranking' if USE_ENHANCED_RAG else 'Original RAG',
+            'reranker_active': bool(USE_ENHANCED_RAG and hasattr(rag, 'reranker') and rag.reranker),
+            'reranker_model': rag.reranker_model_name if USE_ENHANCED_RAG and hasattr(rag, 'reranker_model_name') else None,
+            'stage1_candidates': rag.first_stage_k if USE_ENHANCED_RAG and hasattr(rag, 'first_stage_k') else 'N/A',
+            'final_results': rag.final_k if USE_ENHANCED_RAG and hasattr(rag, 'final_k') else 'N/A'
+        },
         'endpoints': {
-            '/api/chat': 'POST - Send a query to get a response from the chatbot',
+            '/api/chat': 'POST - Send a query to get a response from the enhanced chatbot',
             '/api/health': 'GET - Check if the API is running',
             '/api/memory': 'GET - Get memory for a session',
-            '/api/memory/clear': 'POST - Clear memory for a session'
+            '/api/memory/clear': 'POST - Clear memory for a session',
+            '/api/rag/reindex': 'POST - Force reindexing of documents'
         },
         'documents_indexed': len(rag.documents) if hasattr(rag, 'documents') else 0
     })
@@ -96,20 +178,44 @@ def chat():
         memory_manager.add_user_message(session_id, query, user_id=user_id)
 
         conversation_history = memory_manager.get_chat_history(session_id)
+        # Retrieve long-term memory facts related to the query
+        long_term_facts = memory_manager.retrieve_long_term_memory(session_id, query)
+        if long_term_facts:
+            conversation_history.insert(0, {
+                "role": "system",
+                "content": "LONG_TERM_MEMORY:\n" + "\n".join(long_term_facts)
+            })
         response_data = rag.generate_answer(query, conversation_history)
         content = response_data.get("content", "")
         thinking = response_data.get("thinking", "")
+        retrieved_context = response_data.get("retrieved_context", "")
 
-        logger.info(f"Generated response with {len(content)} characters.")
+        # Enhanced response information
+        reranked = response_data.get("reranked", False) if USE_ENHANCED_RAG else False
+        num_sources = response_data.get("num_sources", 0)
+
+        logger.info(f"Generated response with {len(content)} characters. Reranked: {reranked}, Sources: {num_sources}")
 
         # Get message_id from AI message
         message_id = memory_manager.add_ai_message(session_id, content, user_id=user_id)
 
-        return jsonify({
+        response_json = {
             'response': content,
             'message_id': message_id,
-            'session_id': session_id
-        })
+            'session_id': session_id,
+            'thinking': thinking,
+            'retrieved_context': retrieved_context
+        }
+        
+        # Add enhanced RAG metadata if available
+        if USE_ENHANCED_RAG:
+            response_json['rag_metadata'] = {
+                'reranked': reranked,
+                'num_sources': num_sources,
+                'system_type': 'enhanced'
+            }
+
+        return jsonify(response_json)
 
     except Exception as e:
         logger.error(f"Chat error: {e}", exc_info=True)

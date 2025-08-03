@@ -70,8 +70,10 @@ This will typically start the development server (e.g., on `http://localhost:517
 ## Configuration
 
 The chatbot currently communicates with a backend API endpoint:
-`https://eefb-140-113-169-2.ngrok-free.app/api/chat` for sending messages.
-`https://eefb-140-113-169-2.ngrok-free.app/api/memory/clear` for clearing session memory.
+- `[YOUR_BACKEND_URL]/api/chat` for sending messages.
+- `[YOUR_BACKEND_URL]/api/memory/clear` for clearing session memory.
+
+**Note:** Replace `[YOUR_BACKEND_URL]` with your actual backend URL (e.g., `http://localhost:5000` for local development or your deployed backend URL).
 
 If you need to change this (e.g., to point to a different backend or a locally running service), you'll need to update the `fetch` URLs in `src/components/chat/ChatBot.tsx`.
 

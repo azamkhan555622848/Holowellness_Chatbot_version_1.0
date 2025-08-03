@@ -13,6 +13,8 @@ interface Message {
   timestamp: string;
   isThinking?: boolean;
   rating?: number; // 1-5, or undefined
+  thinking?: string; // AI thinking process
+  retrievedContext?: string; // Retrieved context from documents
 }
 
 export const ChatBot = () => {
@@ -20,6 +22,8 @@ export const ChatBot = () => {
   const [isThinking, setIsThinking] = useState(false);
   const [thinkingText, setThinkingText] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [expandedThinking, setExpandedThinking] = useState<{[key: number]: boolean}>({});
+  const [expandedContext, setExpandedContext] = useState<{[key: number]: boolean}>({});
 
   useEffect(() => {
     const savedSessionId = localStorage.getItem("chatSessionId");
@@ -52,7 +56,7 @@ export const ChatBot = () => {
       if (sessionId) payload.session_id = sessionId;
 
       const response = await fetch(
-        "https://eefb-140-113-169-2.ngrok-free.app/api/chat",
+        "/api/chat",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -73,18 +77,6 @@ export const ChatBot = () => {
         localStorage.setItem("chatSessionId", data.session_id);
       }
 
-      if (data.thinking) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            text: data.thinking,
-            isUser: false,
-            timestamp: new Date().toLocaleTimeString(),
-            isThinking: true,
-          },
-        ]);
-      }
-
       setMessages((prev) => [
         ...prev,
         {
@@ -92,6 +84,8 @@ export const ChatBot = () => {
           isUser: false,
           timestamp: new Date().toLocaleTimeString(),
           _id: data.message_id, // Backend must send this!
+          thinking: data.thinking,
+          retrievedContext: data.retrieved_context,
         },
       ]);
     } catch (error) {
@@ -115,7 +109,7 @@ export const ChatBot = () => {
     starRating: number
   ) => {
     try {
-      await fetch("https://eefb-140-113-169-2.ngrok-free.app/api/chat/rate", {
+      await fetch("/api/chat/rate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message_id: messageId, rating: starRating }),
@@ -137,7 +131,7 @@ export const ChatBot = () => {
     const realForce = typeof force === "boolean" ? force : false;
 
     if (sessionId) {
-      fetch("https://eefb-140-113-169-2.ngrok-free.app/api/memory/clear", {
+      fetch("/api/memory/clear", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId }),
@@ -172,6 +166,46 @@ export const ChatBot = () => {
               timestamp={message.timestamp}
               isThinking={message.isThinking}
             />
+
+            {/* Show thinking process for AI responses */}
+            {!message.isUser && message.thinking && (
+              <div className="ml-2 mt-2 bg-blue-50 rounded-md border border-blue-200">
+                <button
+                  onClick={() => setExpandedThinking(prev => ({...prev, [index]: !prev[index]}))}
+                  className="w-full flex items-center justify-between p-2 text-xs font-semibold text-blue-700 hover:bg-blue-100 rounded-t-md"
+                >
+                  <span>🤔 View thinking process</span>
+                  <span className={`transform transition-transform ${expandedThinking[index] ? 'rotate-180' : ''}`}>
+                    ▼
+                  </span>
+                </button>
+                {expandedThinking[index] && (
+                  <div className="p-3 pt-0 text-xs text-blue-600 whitespace-pre-wrap border-t border-blue-200">
+                    {message.thinking}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Show retrieved context for AI responses */}
+            {!message.isUser && message.retrievedContext && (
+              <div className="ml-2 mt-2 bg-green-50 rounded-md border border-green-200">
+                <button
+                  onClick={() => setExpandedContext(prev => ({...prev, [index]: !prev[index]}))}
+                  className="w-full flex items-center justify-between p-2 text-xs font-semibold text-green-700 hover:bg-green-100 rounded-t-md"
+                >
+                  <span>📚 View retrieved sources</span>
+                  <span className={`transform transition-transform ${expandedContext[index] ? 'rotate-180' : ''}`}>
+                    ▼
+                  </span>
+                </button>
+                {expandedContext[index] && (
+                  <div className="p-3 pt-0 text-xs text-green-600 whitespace-pre-wrap max-h-48 overflow-y-auto border-t border-green-200">
+                    {message.retrievedContext}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Show rating stars for every AI response */}
             {!message.isUser && message._id && (

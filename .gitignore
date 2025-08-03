@@ -13,6 +13,17 @@ dist
 dist-ssr
 *.local
 
+# Python
+__pycache__/
+*.pyc
+.venv/
+backend/.venv/
+backend/cache/
+*.faiss
+
+# Environment
+.env
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -30,3 +41,7 @@ backend/translational-layer-1.5B/
 backend/pdfs/
 backend/rag_cache.pkl
 *.pkl
+*.gguf
+*.bin
+*.safetensors
+backend/pdfs/*.pdf

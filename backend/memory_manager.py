@@ -2,7 +2,7 @@ from langchain.memory import (
     ConversationBufferMemory,
     ConversationBufferWindowMemory,
     ConversationTokenBufferMemory,
-    ConversationSummaryMemory
+    ConversationSummaryMemory,
 )
 from langchain.schema import HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
@@ -20,11 +20,104 @@ import threading
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from bson import ObjectId, errors
+from langchain_core.language_models import BaseChatModel
+from langchain_core.language_models import BaseLanguageModel  # for token counting interface
+import tiktoken
+
+# Vector store & embedding
+import faiss
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()  # Load environment variables from .env
 
 
 logger = logging.getLogger(__name__)
+
+class TokenCountingLLM(BaseLanguageModel):
+    """A minimal LLM that only implements token counting for LangChain memory.
+    It never actually generates text – it's used solely so ConversationTokenBufferMemory
+    can call `get_num_tokens_(from_)messages` without requiring an external API key."""
+
+    def __init__(self, model_name: str = "gpt2"):
+        self.enc = tiktoken.get_encoding(model_name)
+        self.model_name = model_name
+
+    @property
+    def _llm_type(self) -> str:
+        return "token-count-only"
+
+    def _call(self, prompt: str, stop: Optional[List[str]] = None) -> str:  # type: ignore[override]
+        raise NotImplementedError("TokenCountingLLM is for counting only, not generation")
+
+    # Token counting helpers used by LangChain memory
+    def get_num_tokens(self, text: str) -> int:  # type: ignore
+        return len(self.enc.encode(text))
+
+    def get_num_tokens_from_messages(self, messages: List[Any]) -> int:  # type: ignore
+        total = 0
+        for m in messages:
+            if hasattr(m, "content") and isinstance(m.content, str):
+                total += self.get_num_tokens(m.content)
+        return total
+
+class HybridMemory:
+    """Custom memory that combines token buffer with rolling summarization."""
+    
+    def __init__(self, llm, max_token_limit: int = 6000):
+        self.token_memory = ConversationTokenBufferMemory(
+            llm=llm, 
+            max_token_limit=max_token_limit, 
+            return_messages=True
+        )
+        self.summary = ""  # Rolling summary of older conversations
+        self.llm = llm
+        
+    def add_user_message(self, message: str):
+        # Before adding, check if we need to summarize old content
+        self._maybe_summarize()
+        self.token_memory.chat_memory.add_user_message(message)
+        
+    def add_ai_message(self, message: str):
+        self.token_memory.chat_memory.add_ai_message(message)
+        
+    def _maybe_summarize(self):
+        """Summarize older messages if token buffer is getting full."""
+        current_messages = self.token_memory.chat_memory.messages
+        if len(current_messages) > 10:  # If we have many messages, summarize older ones
+            # Take first 6 messages for summarization
+            old_messages = current_messages[:6]
+            recent_messages = current_messages[6:]
+            
+            # Create summary of old messages
+            conversation_text = "\n".join([
+                f"{'User' if isinstance(msg, HumanMessage) else 'Assistant'}: {msg.content}"
+                for msg in old_messages
+            ])
+            
+            try:
+                if hasattr(self.llm, '_call'):  # Real LLM
+                    summary_prompt = f"Summarize this medical conversation concisely:\n{conversation_text}\n\nSummary:"
+                    new_summary = self.llm._call(summary_prompt)
+                    if self.summary:
+                        self.summary = f"{self.summary}\n{new_summary}"
+                    else:
+                        self.summary = new_summary
+            except:
+                # Fallback: simple concatenation for TokenCountingLLM
+                self.summary = f"{self.summary}\nOlder conversation: {len(old_messages)} messages"
+            
+            # Keep only recent messages in token buffer
+            self.token_memory.chat_memory.messages = recent_messages
+            
+    @property
+    def messages(self):
+        """Return messages with summary prepended if available."""
+        messages = []
+        if self.summary:
+            messages.append(HumanMessage(content=f"Previous conversation summary: {self.summary}"))
+        messages.extend(self.token_memory.chat_memory.messages)
+        return messages
 
 class MemoryManager:
     """Manages conversation memory using LangChain memory components"""
@@ -49,17 +142,23 @@ class MemoryManager:
         self.max_token_limit = max_token_limit
         self.sessions = {}
         self.last_access = {}
+        # --- Long-term vector memory ---
+        self.vector_stores = {}        # session_id -> faiss index
+        self.fact_texts = {}           # session_id -> List[str]
+        self.fact_embedder = SentenceTransformer("all-MiniLM-L6-v2")
+        self.embedding_dim = self.fact_embedder.get_sentence_embedding_dimension()
         
         # Start cleanup thread
         self.cleanup_thread = threading.Thread(target=self._cleanup_old_sessions, daemon=True)
         self.cleanup_thread.start()
         
         # Initialize OpenAI client for summary memory if needed
-        if memory_type == "summary":
+        if memory_type in {"summary", "token_buffer"}:
             api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError("OPENAI_API_KEY environment variable is required for summary memory")
-            self.llm = ChatOpenAI(api_key=api_key)
+            if api_key:
+                self.llm = ChatOpenAI(api_key=api_key)
+            else:
+                self.llm = TokenCountingLLM()
     
     def _create_memory(self) -> Any:
         """Create a new memory instance based on the configured type"""
@@ -68,7 +167,7 @@ class MemoryManager:
         elif self.memory_type == "buffer_window":
             return ConversationBufferWindowMemory(k=5, return_messages=True)
         elif self.memory_type == "token_buffer":
-            return ConversationTokenBufferMemory(llm=self.llm, max_token_limit=self.max_token_limit, return_messages=True)
+            return HybridMemory(llm=self.llm, max_token_limit=self.max_token_limit)
         elif self.memory_type == "summary":
             return ConversationSummaryMemory(llm=self.llm, return_messages=True)
         else:
@@ -129,7 +228,12 @@ class MemoryManager:
         
     def add_user_message(self, session_id, message, user_id=None):
         memory = self.get_session(session_id)
-        memory.chat_memory.add_user_message(message)
+        if hasattr(memory, 'add_user_message'):
+            memory.add_user_message(message)  # HybridMemory
+        else:
+            memory.chat_memory.add_user_message(message)  # Standard LangChain memory
+        # Try to persist potential long-term fact
+        self._maybe_store_long_term_fact(session_id, message)
         if user_id:
             # Fetch the chatbot_id from the session doc (should already exist!)
             session = self.chatbot_collection.find_one({"_id": ObjectId(session_id)})
@@ -140,7 +244,10 @@ class MemoryManager:
 
     def add_ai_message(self, session_id, message, user_id=None, previous_message=None):
         memory = self.get_session(session_id)
-        memory.chat_memory.add_ai_message(message)
+        if hasattr(memory, 'add_ai_message'):
+            memory.add_ai_message(message)  # HybridMemory
+        else:
+            memory.chat_memory.add_ai_message(message)  # Standard LangChain memory
         message_id = None
         if user_id:
             session = self.chatbot_collection.find_one({"_id": ObjectId(session_id)})
@@ -197,7 +304,10 @@ class MemoryManager:
             return []
         
         memory = self.sessions[session_id]
-        messages = memory.chat_memory.messages
+        if hasattr(memory, 'messages'):
+            messages = memory.messages  # HybridMemory
+        else:
+            messages = memory.chat_memory.messages  # Standard LangChain memory
         
         # Convert LangChain messages to dict format
         history = []
@@ -212,7 +322,15 @@ class MemoryManager:
     def get_memory_variables(self, session_id: str) -> Dict[str, Any]:
         """Get memory variables for a session"""
         memory = self.get_session(session_id)
-        return memory.load_memory_variables({})
+        if hasattr(memory, 'load_memory_variables'):
+            return memory.load_memory_variables({})  # Standard LangChain memory
+        else:
+            # For HybridMemory, return a summary of the current state
+            return {
+                "history": self.get_chat_history(session_id),
+                "summary": getattr(memory, 'summary', ''),
+                "message_count": len(memory.messages) if hasattr(memory, 'messages') else 0
+            }
     
     def clear_session(self, session_id: str) -> None:
         """Clear a session from memory"""
@@ -259,6 +377,42 @@ class MemoryManager:
             # Sleep for 10 minutes
             time.sleep(600)
 
+    # ---------------- Long-term memory helpers ----------------
+
+    def _maybe_store_long_term_fact(self, session_id: str, message: str):
+        """Heuristic extraction & storage of personal facts into FAISS vector store."""
+        text = message.strip()
+        # Simple heuristic: if the user talks about themselves and the sentence is short
+        if len(text) > 250:
+            return  # skip long paragraphs for now
+        lowered = text.lower()
+        if not any(pron in lowered for pron in ["i ", "my ", "i'm", "i am", "me "]):
+            return  # not obviously personal
+
+        embedding = self.fact_embedder.encode([text])[0].astype(np.float32)
+
+        # Create vector store for session if missing
+        if session_id not in self.vector_stores:
+            index = faiss.IndexFlatL2(self.embedding_dim)
+            self.vector_stores[session_id] = index
+            self.fact_texts[session_id] = []
+
+        index = self.vector_stores[session_id]
+        index.add(np.array([embedding]))
+        self.fact_texts[session_id].append(text)
+
+    def retrieve_long_term_memory(self, session_id: str, query: str, k: int = 3) -> List[str]:
+        """Return top-k remembered facts for this session."""
+        if session_id not in self.vector_stores or self.vector_stores[session_id].ntotal == 0:
+            return []
+
+        embedding = self.fact_embedder.encode([query])[0].astype(np.float32)
+        D, I = self.vector_stores[session_id].search(np.array([embedding]), k)
+        facts = []
+        for idx in I[0]:
+            if idx < len(self.fact_texts[session_id]):
+                facts.append(self.fact_texts[session_id][idx])
+        return facts
 
 # Create a global instance with default settings
-memory_manager = MemoryManager(memory_type="buffer_window") 
+memory_manager = MemoryManager(memory_type="token_buffer", max_token_limit=6000) 
