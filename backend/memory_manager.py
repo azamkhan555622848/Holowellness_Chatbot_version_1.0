@@ -39,9 +39,13 @@ class TokenCountingLLM(BaseLanguageModel):
     It never actually generates text – it's used solely so ConversationTokenBufferMemory
     can call `get_num_tokens_(from_)messages` without requiring an external API key."""
 
-    def __init__(self, model_name: str = "gpt2"):
-        self.enc = tiktoken.get_encoding(model_name)
-        self.model_name = model_name
+    enc: Any = None
+    model_name: str = "gpt2"
+
+    def __init__(self, model_name: str = "gpt2", **kwargs):
+        super().__init__(**kwargs)
+        object.__setattr__(self, 'enc', tiktoken.get_encoding(model_name))
+        object.__setattr__(self, 'model_name', model_name)
 
     @property
     def _llm_type(self) -> str:
