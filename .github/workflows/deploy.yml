@@ -190,7 +190,7 @@ jobs:
         sudo fuser -k 5000/tcp || true
         
         # Create a gunicorn config for better logging
-        cat > gunicorn.conf.py << 'EOF'
+        cat > gunicorn.conf.py << 'GUNICORN_CONFIG'
 bind = "0.0.0.0:5000"
 workers = 2
 timeout = 120
@@ -200,7 +200,7 @@ preload_app = True
 daemon = True
 user = "ubuntu"
 group = "ubuntu"
-EOF
+GUNICORN_CONFIG
         
         # Start gunicorn from the virtual environment with proper paths
         echo "📁 Current directory: $(pwd)"
@@ -230,7 +230,7 @@ EOF
             PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
             
             # Configure simple nginx proxy to forward port 80 to 5000
-            sudo tee /etc/nginx/sites-available/holowellness > /dev/null << 'EOF'
+            sudo tee /etc/nginx/sites-available/holowellness > /dev/null << 'NGINX_CONFIG'
 server {
     listen 80;
     server_name _;
@@ -243,7 +243,7 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 }
-EOF
+NGINX_CONFIG
             
             # Enable the site and restart nginx
             sudo ln -sf /etc/nginx/sites-available/holowellness /etc/nginx/sites-enabled/
