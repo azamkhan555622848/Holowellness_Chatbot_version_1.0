@@ -6,7 +6,13 @@ import numpy as np
 import requests
 import json
 import docx
-import pytesseract
+try:
+    import pytesseract
+    PYTESSERACT_AVAILABLE = True
+except ImportError:
+    PYTESSERACT_AVAILABLE = False
+    pytesseract = None
+
 from PIL import Image
 import io
 import pickle
@@ -30,8 +36,19 @@ try:
 except ImportError:
     import ollama
     print("Using local Ollama (fallback)")
-import easyocr
-from pdf2image import convert_from_path
+try:
+    import easyocr
+    EASYOCR_AVAILABLE = True
+except ImportError:
+    EASYOCR_AVAILABLE = False
+    easyocr = None
+
+try:
+    from pdf2image import convert_from_path
+    PDF2IMAGE_AVAILABLE = True
+except ImportError:
+    PDF2IMAGE_AVAILABLE = False
+    convert_from_path = None
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
@@ -70,10 +87,14 @@ class RAGSystem:
 
     def _init_ocr(self):
         """Initialize OCR reader only when needed"""
+        if not EASYOCR_AVAILABLE:
+            print("EasyOCR not available - OCR functionality disabled")
+            return False
         if self.ocr_reader is None:
             print("Initializing EasyOCR...")
             self.ocr_reader = easyocr.Reader(['en'])  # Add more languages if needed: ['en', 'es', 'fr']
             print("EasyOCR initialized successfully")
+        return True
 
     def _chunk_text(self, text: str) -> List[str]:
         words = text.split()
@@ -124,7 +145,12 @@ class RAGSystem:
         Extract text using OCR from PDF pages
         """
         try:
-            self._init_ocr()  # Initialize OCR if not already done
+            if not self._init_ocr():  # Initialize OCR if not already done
+                return ""  # Return empty string if OCR not available
+            
+            if not PDF2IMAGE_AVAILABLE:
+                print("pdf2image not available - cannot convert PDF to images for OCR")
+                return ""
             
             # Convert PDF pages to images
             if specific_pages:
