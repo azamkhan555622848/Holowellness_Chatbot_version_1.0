@@ -54,7 +54,17 @@ jobs:
         
         # Copy built frontend to backend static folder
         mkdir -p deployment/static
-        cp -r dist/* deployment/static/ 2>/dev/null || echo "No frontend build files found"
+        if [ -d "dist" ] && [ "$(ls -A dist)" ]; then
+          echo "✅ Copying frontend build files from dist/ to deployment/static/"
+          cp -r dist/* deployment/static/
+          echo "📁 Frontend files copied:"
+          ls -la deployment/static/
+        else
+          echo "❌ Error: dist/ folder is empty or doesn't exist after build"
+          echo "🔍 Checking build output:"
+          ls -la dist/ || echo "dist/ folder does not exist"
+          exit 1
+        fi
         
         # Copy deployment scripts
         cp -r deploy deployment/

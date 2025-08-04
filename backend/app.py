@@ -366,6 +366,20 @@ def minimal():
     """Serve the minimal HTML test file"""
     return send_from_directory('static', 'minimal.html')
 
+@app.route('/assets/<path:filename>')
+def serve_assets(filename):
+    """Serve Vite build assets (JS, CSS, etc.)"""
+    return send_from_directory('static/assets', filename)
+
+@app.route('/<path:filename>')
+def serve_static_files(filename):
+    """Serve other static files from the static directory"""
+    try:
+        return send_from_directory('static', filename)
+    except FileNotFoundError:
+        # If file not found, serve index.html for SPA routing
+        return send_from_directory('static', 'index.html')
+
 
 
 if __name__ == '__main__':
