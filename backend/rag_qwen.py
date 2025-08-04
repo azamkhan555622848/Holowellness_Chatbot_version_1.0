@@ -424,6 +424,7 @@ Now respond to your patient in the same natural, caring way. Give your assessmen
         otherwise creates them from the source documents.
         """
         self.embedder = SentenceTransformer(self.embeddings_model_name)
+        self.embedding_dim = self.embedder.get_sentence_embedding_dimension()
 
         if os.path.exists(self.docs_cache) and os.path.exists(self.bm25_cache) and os.path.exists(self.vector_cache):
             print("Loading embeddings and indices from cache...")
@@ -444,11 +445,29 @@ Now respond to your patient in the same natural, caring way. Give your assessmen
         """
         print("Saving embeddings and indices to cache...")
         
+        if not self.documents:
+            print("Warning: No documents found to create embeddings from.")
+            # Create empty indices with default dimensions
+            self.vector_store = faiss.IndexFlatL2(self.embedding_dim)
+            faiss.write_index(self.vector_store, self.vector_cache)
+            
+            # Create empty BM25 index
+            self.bm25_index = BM25Okapi([[]])  # Empty corpus
+            with open(self.bm25_cache, 'wb') as f:
+                pickle.dump(self.bm25_index, f)
+            return
+        
         embeddings = self.embedder.encode([doc['text'] for doc in self.documents])
         embeddings_np = np.array(embeddings, dtype=np.float32)
         
-        self.vector_store = faiss.IndexFlatL2(embeddings_np.shape[1])
-        self.vector_store.add(embeddings_np)
+        # Ensure we have valid embeddings
+        if embeddings_np.size == 0 or len(embeddings_np.shape) != 2:
+            print("Warning: Invalid embeddings created. Using default dimensions.")
+            self.vector_store = faiss.IndexFlatL2(self.embedding_dim)
+        else:
+            self.vector_store = faiss.IndexFlatL2(embeddings_np.shape[1])
+            self.vector_store.add(embeddings_np)
+            
         faiss.write_index(self.vector_store, self.vector_cache)
 
         tokenized_corpus = [doc['text'].split(" ") for doc in self.documents]
