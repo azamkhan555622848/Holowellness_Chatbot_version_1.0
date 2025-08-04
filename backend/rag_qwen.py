@@ -241,6 +241,11 @@ class RAGSystem:
         """
         Performs a hybrid search using both BM25 and FAISS.
         """
+        # Return empty results if no documents are available
+        if not self.documents:
+            print("Warning: No documents available for search")
+            return []
+            
         # Vector search (FAISS)
         query_embedding = self.embedder.encode([query])
         D, I = self.vector_store.search(np.array(query_embedding, dtype=np.float32), k=self.top_k)
@@ -451,8 +456,8 @@ Now respond to your patient in the same natural, caring way. Give your assessmen
             self.vector_store = faiss.IndexFlatL2(self.embedding_dim)
             faiss.write_index(self.vector_store, self.vector_cache)
             
-            # Create empty BM25 index
-            self.bm25_index = BM25Okapi([[]])  # Empty corpus
+            # Create empty BM25 index with dummy document to avoid division by zero
+            self.bm25_index = BM25Okapi([["dummy"]])  # Single dummy document
             with open(self.bm25_cache, 'wb') as f:
                 pickle.dump(self.bm25_index, f)
             return
