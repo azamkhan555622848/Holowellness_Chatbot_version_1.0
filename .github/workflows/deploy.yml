@@ -200,7 +200,7 @@ jobs:
         daemon = True
         user = "ubuntu"
         group = "ubuntu"
-GUNICORN_CONFIG
+        GUNICORN_CONFIG
         
         # Start gunicorn from the virtual environment with proper paths
         echo "📁 Current directory: $(pwd)"
