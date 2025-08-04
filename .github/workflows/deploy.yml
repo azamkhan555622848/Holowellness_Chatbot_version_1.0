@@ -112,7 +112,7 @@ jobs:
         ls -l holowellness-key.pem
         
         # Create deployment script for remote execution  
-        cat > remote-deploy.sh << EOF
+        cat > remote-deploy.sh << 'EOF'
         #!/bin/bash
         set -e
         
