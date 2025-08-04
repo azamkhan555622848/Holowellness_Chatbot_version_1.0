@@ -13,62 +13,28 @@ class OpenRouterClient:
     """OpenRouter API client that mimics Ollama interface"""
     
     def __init__(self):
-        self.client = None
-        api_key = os.getenv("OPENROUTER_API_KEY", "dummy_key")
+        """Initialize OpenRouter client following official documentation"""
+        api_key = os.getenv("OPENROUTER_API_KEY")
         base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         
-        # Try multiple initialization approaches
-        initialization_attempts = [
-            # Attempt 1: Basic initialization with just required params
-            lambda: openai.OpenAI(api_key=api_key, base_url=base_url),
-            # Attempt 2: Minimal initialization with only API key
-            lambda: openai.OpenAI(api_key=api_key),
-            # Attempt 3: Use default initialization and set attributes after
-            lambda: self._init_with_defaults(api_key, base_url)
-        ]
+        if not api_key:
+            logger.warning("OPENROUTER_API_KEY not found in environment variables")
+            api_key = "dummy_key"  # Provide a dummy key to prevent initialization errors
         
-        for i, init_func in enumerate(initialization_attempts):
-            try:
-                self.client = init_func()
-                if self.client is not None:
-                    logger.info(f"OpenAI client initialized successfully (attempt {i+1})")
-                    break
-            except Exception as e:
-                logger.warning(f"OpenAI client initialization attempt {i+1} failed: {e}")
-                if i == len(initialization_attempts) - 1:
-                    logger.error("All OpenAI client initialization attempts failed - OpenRouter functionality will be disabled")
-                    # Set client to None to prevent further errors
-                    self.client = None
+        try:
+            # Initialize OpenRouter client according to official documentation
+            # Start with minimal parameters to avoid compatibility issues
+            self.client = openai.OpenAI(
+                base_url=base_url,
+                api_key=api_key
+            )
+            logger.info("OpenRouter client initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize OpenRouter client: {e}")
+            logger.error(f"Error details: {type(e).__name__}: {str(e)}")
+            self.client = None
                 
         self.model_name = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1")
-        
-        if not os.getenv("OPENROUTER_API_KEY"):
-            logger.warning("OPENROUTER_API_KEY not found in environment variables")
-    
-    def _init_with_defaults(self, api_key: str, base_url: str):
-        """Fallback initialization method"""
-        try:
-            # Set the environment variable temporarily for default initialization
-            import os
-            original_key = os.environ.get('OPENAI_API_KEY')
-            os.environ['OPENAI_API_KEY'] = api_key
-            
-            client = openai.OpenAI()
-            # Try to set base_url manually if possible
-            if hasattr(client, 'base_url'):
-                client.base_url = base_url
-            
-            # Restore original environment variable
-            if original_key is not None:
-                os.environ['OPENAI_API_KEY'] = original_key
-            else:
-                os.environ.pop('OPENAI_API_KEY', None)
-                
-            return client
-        except Exception as e:
-            # If that fails, try creating a minimal mock client
-            logger.warning(f"Default initialization failed: {e}. Creating mock client.")
-            return None
     
     def chat(self, model: str, messages: List[Dict], options: Dict = None) -> Dict:
         """
