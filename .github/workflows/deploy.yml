@@ -265,7 +265,7 @@ jobs:
         fi
         
         echo "   ✅ Application started successfully"
-        EOF
+EOF
         
         # Copy and execute deployment script on remote instance
         scp -i holowellness-key.pem -o StrictHostKeyChecking=no remote-deploy.sh ubuntu@${{ steps.instance-info.outputs.instance-ip }}:/tmp/
