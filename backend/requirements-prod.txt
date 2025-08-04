@@ -12,7 +12,8 @@ python-dotenv==1.0.0
 pymongo==4.5.0
 
 # AI/ML Libraries
-sentence-transformers==2.2.2
+# Use lighter CPU-only versions for deployment
+sentence-transformers==2.2.2 --extra-index-url https://download.pytorch.org/whl/cpu
 faiss-cpu==1.7.4
 numpy==1.24.3
 pandas==2.0.3
@@ -35,9 +36,9 @@ PyPDF2==3.0.1
 python-docx==0.8.11
 Pillow==10.0.1
 
-# OCR and Image Processing
-easyocr==1.7.0
-pdf2image==1.16.3
+# OCR and Image Processing (Commented out to save disk space)
+# easyocr==1.7.0  # Very heavy with OpenCV dependencies  
+# pdf2image==1.16.3
 
 # AWS SDK
 boto3==1.29.7
