@@ -13,10 +13,23 @@ class OpenRouterClient:
     """OpenRouter API client that mimics Ollama interface"""
     
     def __init__(self):
-        self.client = openai.OpenAI(
-            base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-            api_key=os.getenv("OPENROUTER_API_KEY")
-        )
+        try:
+            self.client = openai.OpenAI(
+                base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+                api_key=os.getenv("OPENROUTER_API_KEY")
+            )
+        except TypeError as e:
+            if "proxies" in str(e):
+                # Handle older OpenAI client version that doesn't support proxies
+                logger.warning(f"OpenAI client initialization failed with proxies error: {e}")
+                # Try without any additional parameters that might cause issues
+                self.client = openai.OpenAI(
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key=os.getenv("OPENROUTER_API_KEY", "dummy_key")
+                )
+            else:
+                raise e
+                
         self.model_name = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1")
         
         if not os.getenv("OPENROUTER_API_KEY"):
