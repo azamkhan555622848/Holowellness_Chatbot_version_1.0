@@ -30,13 +30,14 @@ class OpenRouterClient:
         for i, init_func in enumerate(initialization_attempts):
             try:
                 self.client = init_func()
-                logger.info(f"OpenAI client initialized successfully (attempt {i+1})")
-                break
-            except TypeError as e:
+                if self.client is not None:
+                    logger.info(f"OpenAI client initialized successfully (attempt {i+1})")
+                    break
+            except Exception as e:
                 logger.warning(f"OpenAI client initialization attempt {i+1} failed: {e}")
                 if i == len(initialization_attempts) - 1:
-                    logger.error("All OpenAI client initialization attempts failed")
-                    # Set a dummy client to prevent further errors
+                    logger.error("All OpenAI client initialization attempts failed - OpenRouter functionality will be disabled")
+                    # Set client to None to prevent further errors
                     self.client = None
                 
         self.model_name = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1")
@@ -46,11 +47,28 @@ class OpenRouterClient:
     
     def _init_with_defaults(self, api_key: str, base_url: str):
         """Fallback initialization method"""
-        client = openai.OpenAI()
-        # Try to set attributes manually
-        client.api_key = api_key
-        client.base_url = base_url
-        return client
+        try:
+            # Set the environment variable temporarily for default initialization
+            import os
+            original_key = os.environ.get('OPENAI_API_KEY')
+            os.environ['OPENAI_API_KEY'] = api_key
+            
+            client = openai.OpenAI()
+            # Try to set base_url manually if possible
+            if hasattr(client, 'base_url'):
+                client.base_url = base_url
+            
+            # Restore original environment variable
+            if original_key is not None:
+                os.environ['OPENAI_API_KEY'] = original_key
+            else:
+                os.environ.pop('OPENAI_API_KEY', None)
+                
+            return client
+        except Exception as e:
+            # If that fails, try creating a minimal mock client
+            logger.warning(f"Default initialization failed: {e}. Creating mock client.")
+            return None
     
     def chat(self, model: str, messages: List[Dict], options: Dict = None) -> Dict:
         """
