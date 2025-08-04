@@ -157,12 +157,33 @@ class MemoryManager:
             max_token_limit: Maximum number of tokens to store in memory
         """
 
-        # Inside MemoryManager.__init__()
-        mongo_uri = os.getenv("MONGO_URI" )
-        self.mongo_client = MongoClient(mongo_uri)
-        self.mongo_db = self.mongo_client["db_holo_wellness"]
-        self.chatbot_collection = self.mongo_db["chatbotinteractions"]
-        self.ragfiles_collection = self.mongo_db["ragfiles"]
+        # MongoDB connection with fallback to in-memory storage
+        mongo_uri = os.getenv("MONGO_URI")
+        self.mongodb_available = False
+        self.mongo_client = None
+        self.mongo_db = None
+        self.chatbot_collection = None
+        self.ragfiles_collection = None
+        
+        # In-memory fallback storage
+        self.in_memory_sessions = {}  # session_id -> session document
+        self.in_memory_ragfiles = {}  # file_id -> ragfile document
+        
+        if mongo_uri:
+            try:
+                self.mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+                # Test the connection
+                self.mongo_client.admin.command('ping')
+                self.mongo_db = self.mongo_client["db_holo_wellness"]
+                self.chatbot_collection = self.mongo_db["chatbotinteractions"]
+                self.ragfiles_collection = self.mongo_db["ragfiles"]
+                self.mongodb_available = True
+                logger.info("✅ MongoDB connected successfully")
+            except Exception as e:
+                logger.warning(f"⚠️ MongoDB connection failed: {e}. Using in-memory storage as fallback.")
+                self.mongodb_available = False
+        else:
+            logger.info("🧠 No MONGO_URI provided. Using in-memory storage for session management.")
 
         self.memory_type = memory_type
         self.max_token_limit = max_token_limit
@@ -177,6 +198,68 @@ class MemoryManager:
         # Start cleanup thread
         self.cleanup_thread = threading.Thread(target=self._cleanup_old_sessions, daemon=True)
         self.cleanup_thread.start()
+    
+    def _get_session_document(self, session_id: str):
+        """Get session document from MongoDB or in-memory storage"""
+        if self.mongodb_available:
+            return self.chatbot_collection.find_one({"_id": ObjectId(session_id)})
+        else:
+            return self.in_memory_sessions.get(session_id)
+    
+    def _create_session_document(self, session_id: str, user_id: str, chatbot_id: str, title: str = "Default Chat Session"):
+        """Create session document in MongoDB or in-memory storage"""
+        from datetime import datetime
+        now = datetime.utcnow()
+        
+        session_doc = {
+            "_id": ObjectId(session_id) if self.mongodb_available else session_id,
+            "chatbox_title": title,
+            "user": ObjectId(user_id) if self.mongodb_available else user_id,
+            "chatbot": ObjectId(chatbot_id) if self.mongodb_available else chatbot_id,
+            "messages": [],
+            "created_at": now,
+            "updated_at": now
+        }
+        
+        if self.mongodb_available:
+            self.chatbot_collection.insert_one(session_doc)
+        else:
+            self.in_memory_sessions[session_id] = session_doc
+            
+        return session_doc
+    
+    def _update_session_document(self, session_id: str, update_data: dict):
+        """Update session document in MongoDB or in-memory storage"""
+        if self.mongodb_available:
+            return self.chatbot_collection.update_one(
+                {"_id": ObjectId(session_id)},
+                {"$set": update_data}
+            )
+        else:
+            if session_id in self.in_memory_sessions:
+                self.in_memory_sessions[session_id].update(update_data)
+                return type('MockResult', (), {'matched_count': 1})()
+            return type('MockResult', (), {'matched_count': 0})()
+    
+    def _push_message_to_session(self, session_id: str, message_doc: dict):
+        """Push message to session document in MongoDB or in-memory storage"""
+        from datetime import datetime
+        now = datetime.utcnow()
+        
+        if self.mongodb_available:
+            return self.chatbot_collection.update_one(
+                {"_id": ObjectId(session_id)},
+                {
+                    "$push": {"messages": message_doc},
+                    "$set": {"updated_at": now}
+                }
+            )
+        else:
+            if session_id in self.in_memory_sessions:
+                self.in_memory_sessions[session_id]["messages"].append(message_doc)
+                self.in_memory_sessions[session_id]["updated_at"] = now
+                return type('MockResult', (), {'matched_count': 1})()
+            return type('MockResult', (), {'matched_count': 0})()
         
         # Initialize OpenAI client for summary memory if needed
         if memory_type in {"summary", "token_buffer"}:
@@ -217,22 +300,22 @@ class MemoryManager:
     def _store_message_to_mongo(self, session_id: str, user_id: str, chatbot_id: str,
                             message_body: str, is_user: bool, previous_message: str = None):
         """
-        Appends a message to an EXISTING session document in MongoDB.
+        Appends a message to an EXISTING session document in MongoDB or in-memory storage.
         Does NOT create a new document if session not found.
         """
-        try:
-            chatbot_interaction_id = ObjectId(session_id)
-        except (errors.InvalidId, TypeError):
-            raise ValueError(f"Invalid session_id: {session_id}")
+        # Validate session_id format for MongoDB if needed
+        if self.mongodb_available:
+            try:
+                ObjectId(session_id)
+            except (errors.InvalidId, TypeError):
+                raise ValueError(f"Invalid session_id: {session_id}")
 
-        user_object_id = ObjectId(user_id)
-        chatbot_object_id = ObjectId(chatbot_id)
         now = datetime.utcnow()
 
         # Prepare the message document
         message_doc = {
             "message_id": str(uuid.uuid4()),
-            "chatbot": chatbot_object_id,
+            "chatbot": ObjectId(chatbot_id) if self.mongodb_available else chatbot_id,
             "message_body": message_body,
             "direction": is_user,
             "previous_message": previous_message,
@@ -240,15 +323,8 @@ class MemoryManager:
             "updated_at": now
         }
 
-        # Only PUSH the message, do NOT upsert!
-        result = self.chatbot_collection.update_one(
-            {"_id": chatbot_interaction_id},
-            {
-                "$push": {"messages": message_doc},
-                "$set": {"updated_at": now}
-            }
-            # upsert is omitted (False by default)
-        )
+        # Store the message using helper method
+        result = self._push_message_to_session(session_id, message_doc)
         if result.matched_count == 0:
             raise ValueError(f"No session document found for session_id {session_id}. Message not stored.")
         
@@ -262,7 +338,7 @@ class MemoryManager:
         self._maybe_store_long_term_fact(session_id, message)
         if user_id:
             # Fetch the chatbot_id from the session doc (should already exist!)
-            session = self.chatbot_collection.find_one({"_id": ObjectId(session_id)})
+            session = self._get_session_document(session_id)
             if not session:
                 raise ValueError(f"No session found for id {session_id}")
             chatbot_id = session["chatbot"]
@@ -276,7 +352,7 @@ class MemoryManager:
             memory.chat_memory.add_ai_message(message)  # Standard LangChain memory
         message_id = None
         if user_id:
-            session = self.chatbot_collection.find_one({"_id": ObjectId(session_id)})
+            session = self._get_session_document(session_id)
             chatbot_id = session["chatbot"]
             # -- Build message_doc here so you can get the UUID! --
             import uuid
@@ -290,13 +366,7 @@ class MemoryManager:
                 "created_at": now,
                 "updated_at": now
             }
-            self.chatbot_collection.update_one(
-                {"_id": ObjectId(session_id)},
-                {
-                    "$push": {"messages": message_doc},
-                    "$set": {"updated_at": now}
-                }
-            )
+            self._push_message_to_session(session_id, message_doc)
             message_id = message_doc["message_id"]
         return message_id
 

@@ -146,34 +146,34 @@ def chat():
 
         if not query:
             return jsonify({'error': 'No query provided'}), 400
+
+        # Generate user_id if not provided (for in-memory fallback)
         if not user_id:
-            return jsonify({'error': 'user_id is required'}), 400
+            user_id = str(uuid.uuid4())
+            logger.info(f"Generated user_id for session: {user_id}")
 
-        try:
-            user_object_id = ObjectId(user_id)
-        except Exception:
-            return jsonify({'error': 'Invalid user_id'}), 400
+        # Validate user_id for MongoDB if available
+        if memory_manager.mongodb_available:
+            try:
+                user_object_id = ObjectId(user_id)
+            except Exception:
+                return jsonify({'error': 'Invalid user_id'}), 400
 
+        # Create or validate session
         if not session_id:
-            now = datetime.utcnow()
-            session_oid = ObjectId()
-            session_doc = {
-                "_id": session_oid,
-                "chatbox_title": "Default Chat Session",
-                "user": user_object_id,
-                "chatbot": ObjectId(DEFAULT_CHATBOT_ID),
-                "messages": [],
-                "created_at": now,
-                "updated_at": now
-            }
-            memory_manager.chatbot_collection.insert_one(session_doc)
-            session_id = str(session_oid)
+            session_id = str(uuid.uuid4()) if not memory_manager.mongodb_available else str(ObjectId())
+            session_doc = memory_manager._create_session_document(
+                session_id, user_id, DEFAULT_CHATBOT_ID, "Default Chat Session"
+            )
+            logger.info(f"Created new session: {session_id}")
         else:
-            if not memory_manager.chatbot_collection.find_one({"_id": ObjectId(session_id)}):
+            # Validate existing session
+            session_doc = memory_manager._get_session_document(session_id)
+            if not session_doc:
                 return jsonify({'error': 'Invalid session_id'}), 400
 
         logger.info(f"Received query for session {session_id} from user {user_id}: {query}")
-        chat_session = memory_manager.chatbot_collection.find_one({"_id": ObjectId(session_id)})
+        chat_session = memory_manager._get_session_document(session_id)
         chatbot_id = chat_session["chatbot"]
         memory_manager.add_user_message(session_id, query, user_id=user_id)
 
