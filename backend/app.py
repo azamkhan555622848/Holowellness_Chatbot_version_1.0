@@ -364,6 +364,18 @@ def reindex_rag():
 def api_health_check():
     return jsonify({'status': 'ok', 'message': 'RAG system is running'})
 
+@app.route('/api/debug/routes', methods=['GET'])
+def debug_routes():
+    """Debug endpoint to list all available routes"""
+    routes = []
+    for rule in app.url_map.iter_rules():
+        routes.append({
+            'endpoint': rule.endpoint,
+            'methods': list(rule.methods),
+            'rule': str(rule)
+        })
+    return jsonify({'routes': routes})
+
 @app.route('/minimal', methods=['GET'])
 def minimal():
     """Serve the minimal HTML test file"""
