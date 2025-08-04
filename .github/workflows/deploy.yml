@@ -175,17 +175,31 @@ jobs:
         export FLASK_ENV=production
         export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
         
-        # Start the Flask application (app.py is directly in this directory)
-        python3 app.py &
+        # Start the Flask application with gunicorn (production WSGI server)
+        echo "🚀 Starting Flask application with Gunicorn..."
+        
+        # Kill any existing processes on port 80
+        sudo fuser -k 80/tcp || true
+        
+        # Start gunicorn to serve the Flask app on port 80
+        sudo /opt/holowellness/venv/bin/gunicorn --bind 0.0.0.0:80 --workers 2 --timeout 120 app:app --daemon
         
         echo "⏳ Waiting for application to start..."
-        sleep 10
+        sleep 15
         
-        # Check if application is running
-        if pgrep -f "python3 app.py" > /dev/null; then
-            echo "✅ Flask application started successfully!"
+        # Check if application is running on port 80
+        if curl -f http://localhost/health > /dev/null 2>&1; then
+            echo "✅ Flask application started successfully on port 80!"
+            echo "🌐 Application accessible at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)/"
+            echo "🤖 API endpoint: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)/api/chat"
+            echo "📊 Health check: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)/health"
         else
-            echo "❌ Flask application failed to start"
+            echo "❌ Flask application failed to start or not accessible"
+            # Debug information
+            echo "🔍 Checking process status:"
+            ps aux | grep gunicorn || echo "No gunicorn processes found"
+            echo "🔍 Checking port 80:"
+            sudo netstat -tlnp | grep :80 || echo "Nothing listening on port 80"
             exit 1
         fi
         
