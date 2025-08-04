@@ -178,28 +178,89 @@ jobs:
         # Start the Flask application with gunicorn (production WSGI server)
         echo "🚀 Starting Flask application with Gunicorn..."
         
-        # Kill any existing processes on port 80
-        sudo fuser -k 80/tcp || true
+        # Ensure we're in the correct directory
+        cd /opt/holowellness
         
-        # Start gunicorn to serve the Flask app on port 80
-        sudo /opt/holowellness/venv/bin/gunicorn --bind 0.0.0.0:80 --workers 2 --timeout 120 app:app --daemon
+        # Set environment variables for the app
+        export FLASK_ENV=production
+        export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
+        export PYTHONPATH="/opt/holowellness:$PYTHONPATH"
+        
+        # Kill any existing processes on port 5000 (use 5000 instead of 80 to avoid permission issues)
+        sudo fuser -k 5000/tcp || true
+        
+        # Create a gunicorn config for better logging
+        cat > gunicorn.conf.py << 'EOL'
+bind = "0.0.0.0:5000"
+workers = 2
+timeout = 120
+keepalive = 5
+max_requests = 1000
+preload_app = True
+daemon = True
+user = "ubuntu"
+group = "ubuntu"
+EOL
+        
+        # Start gunicorn from the virtual environment with proper paths
+        echo "📁 Current directory: $(pwd)"
+        echo "🐍 Python path: $PYTHONPATH"
+        
+        # Activate virtual environment and start gunicorn
+        source venv/bin/activate
+        python -c "import app; print('✅ App module can be imported')" || {
+            echo "❌ Failed to import app module"
+            python -c "import sys; print('Python path:', sys.path)"
+            ls -la
+            exit 1
+        }
+        
+        # Start gunicorn with explicit module path
+        nohup venv/bin/gunicorn --config gunicorn.conf.py app:app > gunicorn.log 2>&1 &
+        GUNICORN_PID=$!
         
         echo "⏳ Waiting for application to start..."
-        sleep 15
+        sleep 20
         
-        # Check if application is running on port 80
-        if curl -f http://localhost/health > /dev/null 2>&1; then
-            echo "✅ Flask application started successfully on port 80!"
-            echo "🌐 Application accessible at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)/"
-            echo "🤖 API endpoint: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)/api/chat"
-            echo "📊 Health check: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)/health"
+        # Check if application is running on port 5000
+        if curl -f http://localhost:5000/health > /dev/null 2>&1; then
+            echo "✅ Flask application started successfully on port 5000!"
+            
+            # Get public IP
+            PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+            
+            # Configure simple nginx proxy to forward port 80 to 5000
+            sudo tee /etc/nginx/sites-available/holowellness > /dev/null << 'EOL'
+server {
+    listen 80;
+    server_name _;
+    
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOL
+            
+            # Enable the site and restart nginx
+            sudo ln -sf /etc/nginx/sites-available/holowellness /etc/nginx/sites-enabled/
+            sudo rm -f /etc/nginx/sites-enabled/default
+            sudo systemctl restart nginx
+            
+            echo "🌐 Application accessible at: http://$PUBLIC_IP/"
+            echo "🤖 API endpoint: http://$PUBLIC_IP/api/chat"
+            echo "📊 Health check: http://$PUBLIC_IP/health"
         else
             echo "❌ Flask application failed to start or not accessible"
-            # Debug information
+            echo "🔍 Gunicorn logs:"
+            cat gunicorn.log || echo "No log file found"
             echo "🔍 Checking process status:"
             ps aux | grep gunicorn || echo "No gunicorn processes found"
-            echo "🔍 Checking port 80:"
-            sudo netstat -tlnp | grep :80 || echo "Nothing listening on port 80"
+            echo "🔍 Checking port 5000:"
+            ss -tlnp | grep :5000 || echo "Nothing listening on port 5000"
             exit 1
         fi
         
