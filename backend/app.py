@@ -86,18 +86,27 @@ def health_check():
             'timestamp': datetime.utcnow().isoformat()
         }), 500
 
-# Initialize the RAG system (Enhanced or Original)
+# Initialize the RAG system (Enhanced or Original) with error handling
 PDF_DIR = os.path.join(os.path.dirname(__file__), "pdfs")
 logger.info(f"Initializing RAG system with documents from: {PDF_DIR}")
 
-if USE_ENHANCED_RAG:
-    # Use enhanced RAG with BGE reranking
-    rag = EnhancedRAGSystem(pdf_dir=PDF_DIR)
-    logger.info("✅ Enhanced RAG system with BGE reranking initialized successfully")
-else:
-    # Fall back to original RAG system
-    rag = RAGSystem(PDF_DIR)
-    logger.info("⚠️ Using original RAG system (no reranking)")
+rag = None
+rag_error = None
+
+try:
+    if USE_ENHANCED_RAG:
+        # Use enhanced RAG with BGE reranking
+        rag = EnhancedRAGSystem(pdf_dir=PDF_DIR)
+        logger.info("✅ Enhanced RAG system with BGE reranking initialized successfully")
+    else:
+        # Fall back to original RAG system
+        rag = RAGSystem(PDF_DIR)
+        logger.info("⚠️ Using original RAG system (no reranking)")
+except Exception as e:
+    logger.error(f"❌ RAG system initialization failed: {e}", exc_info=True)
+    rag_error = str(e)
+    rag = None
+    logger.info("🔄 Flask app will continue without RAG system")
 
 DEFAULT_CHATBOT_ID = "664123456789abcdef123456"
 
@@ -116,16 +125,24 @@ def api_info():
     elif USE_ENHANCED_RAG:
         enhanced_info = " (Enhanced RAG - Reranker Loading)"
     
-    return jsonify({
-        'status': 'ok',
-        'message': f'HoloWellness Chatbot API is running with DeepSeek-R1-Distill-Qwen-14B{enhanced_info}',
-        'rag_system': {
+    rag_status = "Not Available"
+    rag_info = {'type': 'Error', 'error': rag_error} if rag_error else {'type': 'Not Initialized'}
+    
+    if rag is not None:
+        rag_status = "Available"
+        rag_info = {
             'type': 'Enhanced RAG with BGE Reranking' if USE_ENHANCED_RAG else 'Original RAG',
             'reranker_active': bool(USE_ENHANCED_RAG and hasattr(rag, 'reranker') and rag.reranker),
             'reranker_model': rag.reranker_model_name if USE_ENHANCED_RAG and hasattr(rag, 'reranker_model_name') else None,
             'stage1_candidates': rag.first_stage_k if USE_ENHANCED_RAG and hasattr(rag, 'first_stage_k') else 'N/A',
             'final_results': rag.final_k if USE_ENHANCED_RAG and hasattr(rag, 'final_k') else 'N/A'
-        },
+        }
+
+    return jsonify({
+        'status': 'ok',
+        'message': f'HoloWellness Chatbot API is running with DeepSeek-R1-Distill-Qwen-14B{enhanced_info}',
+        'rag_status': rag_status,
+        'rag_system': rag_info,
         'endpoints': {
             '/api/chat': 'POST - Send a query to get a response from the enhanced chatbot',
             '/api/health': 'GET - Check if the API is running',
@@ -133,7 +150,7 @@ def api_info():
             '/api/memory/clear': 'POST - Clear memory for a session',
             '/api/rag/reindex': 'POST - Force reindexing of documents'
         },
-        'documents_indexed': len(rag.documents) if hasattr(rag, 'documents') else 0
+        'documents_indexed': len(rag.documents) if rag and hasattr(rag, 'documents') else 0
     })
 
 @app.route('/api/chat', methods=['POST'])
@@ -179,6 +196,12 @@ def chat():
         chat_session = memory_manager._get_session_document(session_id)
         chatbot_id = chat_session["chatbot"]
         memory_manager.add_user_message(session_id, query, user_id=user_id)
+
+        # Check if RAG system is available
+        if rag is None:
+            error_msg = f"RAG system not available: {rag_error}" if rag_error else "RAG system not initialized"
+            logger.error(error_msg)
+            return jsonify({'error': error_msg}), 500
 
         conversation_history = memory_manager.get_chat_history(session_id)
         # Retrieve long-term memory facts related to the query
