@@ -45,7 +45,7 @@ boto3==1.29.7
 
 # Utilities
 requests==2.31.0
-bson==0.5.10
+# bson==0.5.10  # Removed - conflicts with pymongo's built-in bson
 
 # Production WSGI Server
 waitress==2.1.2
