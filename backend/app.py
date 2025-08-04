@@ -358,7 +358,7 @@ def reindex_rag():
 
 
 @app.route('/api/health', methods=['GET'])
-def health_check():
+def api_health_check():
     return jsonify({'status': 'ok', 'message': 'RAG system is running'})
 
 @app.route('/minimal', methods=['GET'])
