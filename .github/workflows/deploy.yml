@@ -191,15 +191,15 @@ jobs:
         
         # Create a gunicorn config for better logging
         cat > gunicorn.conf.py << 'GUNICORN_CONFIG'
-  bind = "0.0.0.0:5000"
-  workers = 2
-  timeout = 120
-  keepalive = 5
-  max_requests = 1000
-  preload_app = True
-  daemon = True
-  user = "ubuntu"
-  group = "ubuntu"
+        bind = "0.0.0.0:5000"
+        workers = 2
+        timeout = 120
+        keepalive = 5
+        max_requests = 1000
+        preload_app = True
+        daemon = True
+        user = "ubuntu"
+        group = "ubuntu"
 GUNICORN_CONFIG
         
         # Start gunicorn from the virtual environment with proper paths
@@ -231,18 +231,18 @@ GUNICORN_CONFIG
             
             # Configure simple nginx proxy to forward port 80 to 5000
             sudo tee /etc/nginx/sites-available/holowellness > /dev/null << 'NGINX_CONFIG'
-  server {
-    listen 80;
-    server_name _;
+        server {
+            listen 80;
+            server_name _;
     
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
+            location / {
+                proxy_pass http://127.0.0.1:5000;
+                proxy_set_header Host \$host;
+                proxy_set_header X-Real-IP \$remote_addr;
+                proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto \$scheme;
+                }
+        }
 NGINX_CONFIG
             
             # Enable the site and restart nginx
