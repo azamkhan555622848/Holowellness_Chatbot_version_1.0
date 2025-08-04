@@ -70,8 +70,11 @@ def health_check():
         
         # Test MongoDB connection
         try:
-            memory_manager.mongo_client.admin.command('ismaster')
-            checks['mongodb_status'] = 'connected'
+            if memory_manager.mongo_client is not None:
+                memory_manager.mongo_client.admin.command('ismaster')
+                checks['mongodb_status'] = 'connected'
+            else:
+                checks['mongodb_status'] = 'error: MongoDB client not initialized'
         except Exception as e:
             checks['mongodb_status'] = f'error: {str(e)}'
             
