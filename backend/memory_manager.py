@@ -61,6 +61,28 @@ class TokenCountingLLM(BaseLanguageModel):
                 total += self.get_num_tokens(m.content)
         return total
 
+    # Required abstract methods from BaseLanguageModel
+    def generate_prompt(self, prompts, stop=None, callbacks=None, **kwargs):
+        raise NotImplementedError("TokenCountingLLM is for counting only, not generation")
+    
+    def agenerate_prompt(self, prompts, stop=None, callbacks=None, **kwargs):
+        raise NotImplementedError("TokenCountingLLM is for counting only, not generation")
+    
+    def predict(self, text, stop=None, **kwargs):
+        raise NotImplementedError("TokenCountingLLM is for counting only, not generation")
+    
+    def apredict(self, text, stop=None, **kwargs):
+        raise NotImplementedError("TokenCountingLLM is for counting only, not generation")
+    
+    def predict_messages(self, messages, stop=None, **kwargs):
+        raise NotImplementedError("TokenCountingLLM is for counting only, not generation")
+    
+    def apredict_messages(self, messages, stop=None, **kwargs):
+        raise NotImplementedError("TokenCountingLLM is for counting only, not generation")
+    
+    def invoke(self, input, config=None, **kwargs):
+        raise NotImplementedError("TokenCountingLLM is for counting only, not generation")
+
 class HybridMemory:
     """Custom memory that combines token buffer with rolling summarization."""
     
