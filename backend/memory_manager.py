@@ -169,6 +169,21 @@ class MemoryManager:
         self.in_memory_sessions = {}  # session_id -> session document
         self.in_memory_ragfiles = {}  # file_id -> ragfile document
         
+        # Initialize memory configuration
+        self.memory_type = memory_type
+        self.max_token_limit = max_token_limit
+        self.sessions = {}
+        self.last_access = {}
+        
+        # Initialize LLM for memory types that need it
+        self.llm = None
+        if memory_type in {"summary", "token_buffer"}:
+            api_key = os.getenv("OPENAI_API_KEY")
+            if api_key:
+                self.llm = ChatOpenAI(api_key=api_key)
+            else:
+                self.llm = TokenCountingLLM()
+        
         if mongo_uri:
             try:
                 self.mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
@@ -265,14 +280,6 @@ class MemoryManager:
                 self.in_memory_sessions[session_id]["updated_at"] = now
                 return type('MockResult', (), {'matched_count': 1})()
             return type('MockResult', (), {'matched_count': 0})()
-        
-        # Initialize OpenAI client for summary memory if needed
-        if memory_type in {"summary", "token_buffer"}:
-            api_key = os.getenv("OPENAI_API_KEY")
-            if api_key:
-                self.llm = ChatOpenAI(api_key=api_key)
-            else:
-                self.llm = TokenCountingLLM()
     
     def _create_memory(self) -> Any:
         """Create a new memory instance based on the configured type"""
@@ -281,8 +288,12 @@ class MemoryManager:
         elif self.memory_type == "buffer_window":
             return ConversationBufferWindowMemory(k=5, return_messages=True)
         elif self.memory_type == "token_buffer":
+            if self.llm is None:
+                self.llm = TokenCountingLLM()  # Fallback if not initialized
             return HybridMemory(llm=self.llm, max_token_limit=self.max_token_limit)
         elif self.memory_type == "summary":
+            if self.llm is None:
+                self.llm = TokenCountingLLM()  # Fallback if not initialized
             return ConversationSummaryMemory(llm=self.llm, return_messages=True)
         else:
             # Default to buffer window memory
