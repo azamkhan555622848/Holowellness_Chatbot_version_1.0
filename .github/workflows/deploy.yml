@@ -253,7 +253,7 @@ jobs:
                     proxy_set_header X-Forwarded-Proto \$scheme;
                 }
             }
-            NGINX_CONFIG
+NGINX_CONFIG
             
             # Enable the site and restart nginx
             sudo ln -sf /etc/nginx/sites-available/holowellness /etc/nginx/sites-enabled/
