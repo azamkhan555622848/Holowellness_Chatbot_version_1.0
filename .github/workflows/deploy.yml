@@ -247,7 +247,7 @@ jobs:
             PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
             
             # Configure simple nginx proxy to forward port 80 to 5000
-            sudo tee /etc/nginx/sites-available/holowellness > /dev/null <<EOF
+            sudo tee /etc/nginx/sites-available/holowellness > /dev/null <<NGINX_EOF
             server {
                 listen 80;
                 server_name _;
@@ -260,7 +260,7 @@ jobs:
                     proxy_set_header X-Forwarded-Proto \$scheme;
                 }
             }
-            EOF
+            NGINX_EOF
             
             # Enable the site and restart nginx
             sudo ln -sf /etc/nginx/sites-available/holowellness /etc/nginx/sites-enabled/
