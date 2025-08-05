@@ -68,7 +68,18 @@ export const ChatBot = () => {
       setIsThinking(false);
       setThinkingText("");
 
-      if (!response.ok) throw new Error("Network error");
+      if (!response.ok) {
+        let errorDetail = `HTTP ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (errorData?.error) {
+            errorDetail = errorData.error;
+          }
+        } catch {
+          // Failed to parse error JSON, keep HTTP status
+        }
+        throw new Error(errorDetail);
+      }
 
       const data = await response.json();
 
@@ -96,7 +107,7 @@ export const ChatBot = () => {
       setMessages((prev) => [
         ...prev,
         {
-          text: "Error fetching response",
+          text: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`,
           isUser: false,
           timestamp: new Date().toLocaleTimeString(),
         },

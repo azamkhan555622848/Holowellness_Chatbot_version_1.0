@@ -156,16 +156,23 @@ def api_info():
 @app.route('/api/chat', methods=['POST'])
 def chat():
     try:
-        data = request.json
+        # Strict JSON parsing with better error handling
+        try:
+            data = request.get_json(force=True, silent=False)
+        except Exception:
+            logger.exception("Invalid JSON in request")
+            return jsonify({'error': 'Invalid JSON'}), 400
+        
         if not data:
             return jsonify({'error': 'No data provided'}), 400
 
-        query = data.get('query')
+        # Accept both 'query' and 'message' for compatibility
+        query = data.get('query') or data.get('message', '').strip()
         user_id = data.get('user_id')
         session_id = data.get('session_id')
 
         if not query:
-            return jsonify({'error': 'No query provided'}), 400
+            return jsonify({'error': 'Field "query" or "message" is required'}), 400
 
         # Generate user_id if not provided (for in-memory fallback)
         if not user_id:
@@ -179,18 +186,23 @@ def chat():
             except Exception:
                 return jsonify({'error': 'Invalid user_id'}), 400
 
-        # Create or validate session
-        if not session_id:
+        # Create or validate session - auto-recover from invalid sessions
+        if not session_id or session_id.strip() == "":
             session_id = str(uuid.uuid4()) if not memory_manager.mongodb_available else str(ObjectId())
             session_doc = memory_manager._create_session_document(
                 session_id, user_id, DEFAULT_CHATBOT_ID, "Default Chat Session"
             )
             logger.info(f"Created new session: {session_id}")
         else:
-            # Validate existing session
+            # Validate existing session, create new if invalid
             session_doc = memory_manager._get_session_document(session_id)
             if not session_doc:
-                return jsonify({'error': 'Invalid session_id'}), 400
+                logger.warning(f"Invalid session_id {session_id}, creating new session")
+                session_id = str(uuid.uuid4()) if not memory_manager.mongodb_available else str(ObjectId())
+                session_doc = memory_manager._create_session_document(
+                    session_id, user_id, DEFAULT_CHATBOT_ID, "Default Chat Session"
+                )
+                logger.info(f"Created recovery session: {session_id}")
 
         logger.info(f"Received query for session {session_id} from user {user_id}: {query}")
         chat_session = memory_manager._get_session_document(session_id)
@@ -211,10 +223,18 @@ def chat():
                 "role": "system",
                 "content": "LONG_TERM_MEMORY:\n" + "\n".join(long_term_facts)
             })
-        response_data = rag.generate_answer(query, conversation_history)
-        content = response_data.get("content", "")
-        thinking = response_data.get("thinking", "")
-        retrieved_context = response_data.get("retrieved_context", "")
+        try:
+            response_data = rag.generate_answer(query, conversation_history)
+            content = response_data.get("content", "")
+            thinking = response_data.get("thinking", "")
+            retrieved_context = response_data.get("retrieved_context", "")
+        except Exception as e:
+            logger.error(f"RAG/LLM generation error: {e}", exc_info=True)
+            # Check if it's an OpenRouter/API error
+            if hasattr(e, 'status_code') or 'api' in str(e).lower():
+                return jsonify({'error': f'LLM provider error: {str(e)[:400]}'}), 502
+            else:
+                return jsonify({'error': 'Chat generation failed'}), 500
 
         # Enhanced response information
         reranked = response_data.get("reranked", False) if USE_ENHANCED_RAG else False
