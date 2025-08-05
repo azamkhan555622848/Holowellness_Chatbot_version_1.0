@@ -48,9 +48,28 @@ pip install -r requirements-prod.txt
 
 echo "   ✅ Python environment ready"
 
-# Step 3: Configure Environment
+# Step 3: Build Frontend
 echo ""
-echo "⚙️  Step 3: Configuring Environment..."
+echo "🔨 Step 3: Building Frontend..."
+cd $APP_DIR
+
+# Install Node.js dependencies
+npm install
+
+# Build React frontend for production
+npm run build
+
+# Create frontend directory and copy build files
+sudo mkdir -p $APP_DIR/frontend/dist
+sudo cp -r dist/* $APP_DIR/frontend/dist/
+sudo chown -R ubuntu:ubuntu $APP_DIR/frontend
+
+echo "   ✅ Frontend built and deployed"
+
+# Step 4: Configure Environment  
+echo ""
+echo "⚙️  Step 4: Configuring Environment..."
+cd backend
 
 # Copy production environment file
 if [ -f ".env.production" ]; then
@@ -64,23 +83,23 @@ else
     fi
 fi
 
-# Step 4: Sync PDFs from S3
+# Step 5: Sync PDFs from S3
 echo ""
-echo "📄 Step 4: Syncing PDFs from S3..."
+echo "📄 Step 5: Syncing PDFs from S3..."
 python sync_rag_pdfs.py || echo "   ⚠️  PDF sync failed - continuing anyway"
 
-# Step 5: Test Application
+# Step 6: Test Application
 echo ""
-echo "🧪 Step 5: Testing Application..."
+echo "🧪 Step 6: Testing Application..."
 export FLASK_ENV=production
 python -c "from app import app; print('✅ Application imports successfully')" || {
     echo "❌ Application test failed"
     exit 1
 }
 
-# Step 6: Create Systemd Service
+# Step 7: Create Systemd Service
 echo ""
-echo "🔧 Step 6: Creating Systemd Service..."
+echo "🔧 Step 7: Creating Systemd Service..."
 
 sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null << EOF
 [Unit]
@@ -106,9 +125,9 @@ EnvironmentFile=$APP_DIR/backend/.env
 WantedBy=multi-user.target
 EOF
 
-# Step 7: Configure Nginx
+# Step 8: Configure Nginx
 echo ""
-echo "🌐 Step 7: Configuring Nginx..."
+echo "🌐 Step 8: Configuring Nginx..."
 
 # Get instance public IP
 INSTANCE_IP=\$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
@@ -165,9 +184,9 @@ sudo rm -f /etc/nginx/sites-enabled/default
 # Test nginx configuration
 sudo nginx -t
 
-# Step 8: Start Services
+# Step 9: Start Services
 echo ""
-echo "🚀 Step 8: Starting Services..."
+echo "🚀 Step 9: Starting Services..."
 
 # Reload systemd and start services
 sudo systemctl daemon-reload
@@ -175,9 +194,9 @@ sudo systemctl enable ${SERVICE_NAME}
 sudo systemctl start ${SERVICE_NAME}
 sudo systemctl reload nginx
 
-# Step 9: Verify Deployment
+# Step 10: Verify Deployment
 echo ""
-echo "✅ Step 9: Verifying Deployment..."
+echo "✅ Step 10: Verifying Deployment..."
 
 # Wait a moment for services to start
 sleep 5

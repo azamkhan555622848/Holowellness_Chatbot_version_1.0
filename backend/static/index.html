@@ -146,14 +146,14 @@
             }
             
             // Check API status
-            fetch('https://f588-140-113-169-2.ngrok-free.app/api/health')
+            fetch('/api/health')
                 .then(response => response.json())
                 .then(data => {
                     statusDiv.textContent = `API Status: ${data.status} - ${data.message}`;
                     statusDiv.className = 'status-ok';
                 })
                 .catch(error => {
-                    statusDiv.textContent = `API Error: ${error.message}. Make sure the backend is running on https://f588-140-113-169-2.ngrok-free.app`;
+                    statusDiv.textContent = `API Error: ${error.message}. Make sure the backend is running`;
                     statusDiv.className = 'status-error';
                 });
             
@@ -161,7 +161,7 @@
             function loadChatHistory() {
                 if (!sessionId) return;
                 
-                fetch(`https://f588-140-113-169-2.ngrok-free.app/api/memory?session_id=${sessionId}`)
+                fetch(`/api/memory?session_id=${sessionId}`)
                     .then(response => response.json())
                     .then(data => {
                         // Clear chat container
@@ -197,7 +197,7 @@
                 chatContainer.scrollTop = chatContainer.scrollHeight;
                 
                 // Send to API
-                fetch('https://f588-140-113-169-2.ngrok-free.app/api/chat', {
+                fetch('/api/chat', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -279,7 +279,7 @@
             clearMemoryButton.addEventListener('click', function() {
                 if (!sessionId) return;
                 
-                fetch('https://f588-140-113-169-2.ngrok-free.app/api/memory/clear', {
+                fetch('/api/memory/clear', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
