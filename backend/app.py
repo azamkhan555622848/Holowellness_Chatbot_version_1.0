@@ -287,6 +287,15 @@ def chat():
                     thinking = "Direct API call (RAG system unavailable)"
                     retrieved_context = "No document retrieval (fallback mode)"
                     
+                    # Create response_data structure for consistency with normal flow
+                    response_data = {
+                        "content": content,
+                        "thinking": thinking,
+                        "retrieved_context": retrieved_context,
+                        "reranked": False,
+                        "num_sources": 0
+                    }
+                    
                     logger.info(f"✅ Fallback successful, content length: {len(content)}")
                 else:
                     logger.error(f"❌ OpenRouter API error: {response.status_code} - {response.text}")
