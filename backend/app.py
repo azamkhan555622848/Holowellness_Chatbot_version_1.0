@@ -267,10 +267,10 @@ def chat():
                 }
                 
                 data = {
-                    "model": "deepseek/deepseek-r1-distill-qwen-14b",
+                    "model": "openai/gpt-oss-120b",
                     "messages": messages,
                     "max_tokens": 1000,
-                    "temperature": 0.7
+                    "temperature": 0.1
                 }
                 
                 logger.info("🌐 Making direct OpenRouter API call...")

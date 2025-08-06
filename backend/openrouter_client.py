@@ -34,7 +34,7 @@ class OpenRouterClient:
             logger.error(f"Error details: {type(e).__name__}: {str(e)}")
             self.client = None
                 
-        self.model_name = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1")
+        self.model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b")
     
     def chat(self, model: str, messages: List[Dict], options: Dict = None) -> Dict:
         """

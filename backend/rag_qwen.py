@@ -55,7 +55,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 load_dotenv()
 
 class RAGSystem:
-    def __init__(self, pdf_directory=None, model_name="deepseek-r1:14b-qwen-distill-q4_K_M", embeddings_model="all-MiniLM-L6-v2", cache_dir="cache", init_embeddings=True, top_k=5):
+    def __init__(self, pdf_directory=None, model_name="openai/gpt-oss-120b", embeddings_model="all-MiniLM-L6-v2", cache_dir="cache", init_embeddings=True, top_k=5):
         """
         Initializes the RAG system with Ollama and OCR capabilities.
         """
