@@ -158,7 +158,8 @@ class MemoryManager:
         """
 
         # MongoDB connection with fallback to in-memory storage
-        mongo_uri = os.getenv("MONGO_URI")
+        # Temporarily disabled MongoDB to use in-memory storage for faster deployment
+        mongo_uri = None  # os.getenv("MONGO_URI")
         self.mongodb_available = False
         self.mongo_client = None
         self.mongo_db = None
@@ -184,26 +185,29 @@ class MemoryManager:
             else:
                 self.llm = TokenCountingLLM()
         
-        if mongo_uri:
-            try:
-                self.mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-                # Test the connection only if client was created successfully
-                if self.mongo_client is not None:
-                    self.mongo_client.admin.command('ping')
-                    self.mongo_db = self.mongo_client["db_holo_wellness"]
-                    self.chatbot_collection = self.mongo_db["chatbotinteractions"]
-                    self.ragfiles_collection = self.mongo_db["ragfiles"]
-                    self.mongodb_available = True
-                    logger.info("✅ MongoDB connected successfully")
-                else:
-                    raise Exception("MongoClient initialization returned None")
-            except Exception as e:
-                logger.warning(f"⚠️ MongoDB connection failed: {e}. Using in-memory storage as fallback.")
-                self.mongodb_available = False
-                # Ensure client is None on failure
-                self.mongo_client = None
-        else:
-            logger.info("🧠 No MONGO_URI provided. Using in-memory storage for session management.")
+        # Temporarily disable MongoDB connection - using in-memory storage
+        logger.info("🧠 MongoDB temporarily disabled. Using in-memory storage for session management.")
+        
+        # if mongo_uri:
+        #     try:
+        #         self.mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        #         # Test the connection only if client was created successfully
+        #         if self.mongo_client is not None:
+        #             self.mongo_client.admin.command('ping')
+        #             self.mongo_db = self.mongo_client["db_holo_wellness"]
+        #             self.chatbot_collection = self.mongo_db["chatbotinteractions"]
+        #             self.ragfiles_collection = self.mongo_db["ragfiles"]
+        #             self.mongodb_available = True
+        #             logger.info("✅ MongoDB connected successfully")
+        #         else:
+        #             raise Exception("MongoClient initialization returned None")
+        #     except Exception as e:
+        #         logger.warning(f"⚠️ MongoDB connection failed: {e}. Using in-memory storage as fallback.")
+        #         self.mongodb_available = False
+        #         # Ensure client is None on failure
+        #         self.mongo_client = None
+        # else:
+        #     logger.info("🧠 No MONGO_URI provided. Using in-memory storage for session management.")
 
         self.memory_type = memory_type
         self.max_token_limit = max_token_limit
