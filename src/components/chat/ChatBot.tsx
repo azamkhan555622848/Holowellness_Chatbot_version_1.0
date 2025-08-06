@@ -159,7 +159,7 @@ export const ChatBot = () => {
   };
 
   return (
-    <div className="fixed bottom-4 right-4 w-[380px] shadow-xl rounded-xl overflow-hidden bg-gray-50">
+    <div className="fixed bottom-4 right-4 w-[480px] max-w-[90vw] shadow-xl rounded-xl overflow-hidden bg-gray-50">
       <ChatHeader
         userName="Artur Beterbiev"
         userImage="/lovable-uploads/320d61e5-9a63-4856-887a-7ac4bd694b9b.png"
