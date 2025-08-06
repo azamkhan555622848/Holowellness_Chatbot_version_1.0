@@ -224,17 +224,85 @@ def chat():
                 "content": "LONG_TERM_MEMORY:\n" + "\n".join(long_term_facts)
             })
         try:
+            logger.info(f"🤖 Starting RAG generation for query: {query[:50]}...")
+            logger.info(f"🔧 RAG system available: {rag is not None}")
+            logger.info(f"🔑 OpenRouter API Key configured: {bool(os.getenv('OPENROUTER_API_KEY'))}")
+            
             response_data = rag.generate_answer(query, conversation_history)
             content = response_data.get("content", "")
             thinking = response_data.get("thinking", "")
             retrieved_context = response_data.get("retrieved_context", "")
+            
+            logger.info(f"✅ RAG generation successful, content length: {len(content)}")
         except Exception as e:
-            logger.error(f"RAG/LLM generation error: {e}", exc_info=True)
-            # Check if it's an OpenRouter/API error
-            if hasattr(e, 'status_code') or 'api' in str(e).lower():
-                return jsonify({'error': f'LLM provider error: {str(e)[:400]}'}), 502
-            else:
-                return jsonify({'error': 'Chat generation failed'}), 500
+            logger.error(f"❌ RAG/LLM generation error: {e}", exc_info=True)
+            logger.error(f"🔍 Error type: {type(e).__name__}")
+            logger.error(f"🔍 Error details: {str(e)}")
+            
+            # FALLBACK: Try direct OpenRouter API call without RAG
+            logger.info("🔄 Attempting fallback: Direct OpenRouter API call...")
+            try:
+                import requests
+                import json
+                
+                api_key = os.getenv('OPENROUTER_API_KEY')
+                if not api_key:
+                    raise Exception("No OpenRouter API key available")
+                
+                # Simple conversation without RAG retrieval
+                messages = [
+                    {"role": "system", "content": "You are a helpful wellness assistant. Provide helpful, accurate responses about health and wellness topics."}
+                ]
+                
+                # Add conversation history (limited to last 5 messages)
+                for msg in conversation_history[-5:]:
+                    messages.append(msg)
+                
+                # Add current user query
+                messages.append({"role": "user", "content": query})
+                
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                data = {
+                    "model": "deepseek/deepseek-r1-distill-qwen-14b",
+                    "messages": messages,
+                    "max_tokens": 1000,
+                    "temperature": 0.7
+                }
+                
+                logger.info("🌐 Making direct OpenRouter API call...")
+                response = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers=headers,
+                    json=data,
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result['choices'][0]['message']['content']
+                    thinking = "Direct API call (RAG system unavailable)"
+                    retrieved_context = "No document retrieval (fallback mode)"
+                    
+                    logger.info(f"✅ Fallback successful, content length: {len(content)}")
+                else:
+                    logger.error(f"❌ OpenRouter API error: {response.status_code} - {response.text}")
+                    raise Exception(f"OpenRouter API error: {response.status_code}")
+                    
+            except Exception as fallback_error:
+                logger.error(f"❌ Fallback also failed: {fallback_error}")
+                # Check if it's an OpenRouter/API error
+                if hasattr(e, 'status_code') or 'api' in str(e).lower():
+                    error_msg = f'LLM provider error: {str(e)[:400]}'
+                    logger.error(f"🌐 API Error detected: {error_msg}")
+                    return jsonify({'error': error_msg}), 502
+                else:
+                    error_msg = f'Chat generation failed: {str(e)}'
+                    logger.error(f"💥 General error: {error_msg}")
+                    return jsonify({'error': error_msg}), 500
 
         # Enhanced response information
         reranked = response_data.get("reranked", False) if USE_ENHANCED_RAG else False
