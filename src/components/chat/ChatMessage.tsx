@@ -32,8 +32,8 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`p-3 max-w-[75%] ${messageClass}`}>
-        <div dangerouslySetInnerHTML={createMarkup(message)} />
+      <div className={`p-3 max-w-[75%] break-words overflow-hidden ${messageClass}`}>
+        <div className="break-words" style={{ wordWrap: 'break-word', overflowWrap: 'break-word' }} dangerouslySetInnerHTML={createMarkup(message)} />
         {timestamp && (
           <div className={`text-xs mt-1 ${isUser ? 'text-blue-200' : 'text-gray-500'}`}>
             {timestamp}
