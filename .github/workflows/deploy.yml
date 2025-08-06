@@ -52,6 +52,10 @@ jobs:
         # Copy backend files
         cp -r backend/* deployment/
         
+        # Copy environment files if they exist
+        [ -f ".env.production" ] && cp .env.production deployment/ || echo "⚠️  .env.production not found"
+        [ -f ".env.example" ] && cp .env.example deployment/ || echo "⚠️  .env.example not found"
+        
         # Copy built frontend to backend static folder
         mkdir -p deployment/static
         if [ -d "dist" ] && [ "$(ls -A dist)" ]; then
@@ -191,6 +195,7 @@ jobs:
         cd /opt/holowellness
         export FLASK_ENV=production
         export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
+        export MONGO_URI="${{ secrets.MONGO_URI }}"
         
         # Start the Flask application with gunicorn (production WSGI server)
         echo "🚀 Starting Flask application with Gunicorn..."
@@ -201,6 +206,7 @@ jobs:
         # Set environment variables for the app
         export FLASK_ENV=production
         export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
+        export MONGO_URI="${{ secrets.MONGO_URI }}"
         export PYTHONPATH="/opt/holowellness:$PYTHONPATH"
         
         # Kill any existing processes on port 5000 (use 5000 instead of 80 to avoid permission issues)
@@ -232,8 +238,8 @@ jobs:
             exit 1
         }
         
-        # Start gunicorn with explicit module path
-        nohup venv/bin/gunicorn --config gunicorn.conf.py app:app > gunicorn.log 2>&1 &
+        # Start gunicorn with explicit module path and environment variables
+        nohup env FLASK_ENV=production OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}" MONGO_URI="${{ secrets.MONGO_URI }}" venv/bin/gunicorn --config gunicorn.conf.py app:app > gunicorn.log 2>&1 &
         GUNICORN_PID=$!
         
         echo "⏳ Waiting for application to start..."
