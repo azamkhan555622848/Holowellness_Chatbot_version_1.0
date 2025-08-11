@@ -19,6 +19,11 @@ FLASK_ENV = os.getenv('FLASK_ENV', 'development')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 
+# RAG/S3 configuration
+RAG_SYNC_ON_START = os.getenv('RAG_SYNC_ON_START', 'true').lower() == 'true'
+RAG_S3_BUCKET = os.getenv('RAG_S3_BUCKET', 'holowellness')
+RAG_S3_PREFIX = os.getenv('RAG_S3_PREFIX', '')  # e.g. 'rag_pdfs/' or '' for root
+
 # Configure logging
 log_level = os.getenv('LOG_LEVEL', 'INFO')
 logging.basicConfig(level=getattr(logging, log_level.upper()))
@@ -107,6 +112,29 @@ except Exception as e:
     rag_error = str(e)
     rag = None
     logger.info("🔄 Flask app will continue without RAG system")
+
+# Optionally sync PDFs from S3 and rebuild indices at startup
+try:
+    if rag is not None and RAG_SYNC_ON_START:
+        needs_sync = True
+        if os.path.isdir(PDF_DIR):
+            pdfs_present = any(name.lower().endswith('.pdf') for name in os.listdir(PDF_DIR))
+            needs_sync = not pdfs_present
+
+        if needs_sync:
+            logger.info(
+                f"📥 RAG_SYNC_ON_START enabled. Syncing PDFs from S3 bucket '{RAG_S3_BUCKET}' prefix '{RAG_S3_PREFIX}'..."
+            )
+            # sync from S3 and rebuild indices
+            sync_pdfs_from_s3()
+            try:
+                rag._ingest_documents()
+                rag._save_embeddings()
+                logger.info("✅ Initial PDF sync & embedding cache built")
+            except Exception as reindex_err:
+                logger.error(f"Failed to build embeddings after sync: {reindex_err}")
+except Exception as sync_err:
+    logger.error(f"Startup sync error: {sync_err}")
 
 DEFAULT_CHATBOT_ID = "664123456789abcdef123456"
 
