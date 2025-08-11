@@ -252,21 +252,20 @@ jobs:
             # Get public IP
             PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
             
-            # Configure simple nginx proxy to forward port 80 to 5000
-            sudo tee /etc/nginx/sites-available/holowellness > /dev/null <<'NGINX_CONF'
-server {
-    listen 80;
-    server_name _;
-
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-NGINX_CONF
+            # Configure simple nginx proxy to forward port 80 to 5000 (no heredoc to avoid YAML issues)
+            printf '%s\n' \
+              'server {' \
+              '    listen 80;' \
+              '    server_name _;' \
+              '' \
+              '    location / {' \
+              '        proxy_pass http://127.0.0.1:5000;' \
+              '        proxy_set_header Host $host;' \
+              '        proxy_set_header X-Real-IP $remote_addr;' \
+              '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;' \
+              '        proxy_set_header X-Forwarded-Proto $scheme;' \
+              '    }' \
+              '}' | sudo tee /etc/nginx/sites-available/holowellness > /dev/null
             
             # Enable the site and restart nginx
             sudo ln -sf /etc/nginx/sites-available/holowellness /etc/nginx/sites-enabled/
