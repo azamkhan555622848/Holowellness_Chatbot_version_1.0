@@ -296,7 +296,6 @@ jobs:
         
         echo "   ✅ Application started successfully"
         EOF
-        EOF
         
         # Copy and execute deployment script on remote instance using EIC key
         scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no remote-deploy.sh ubuntu@${PUBLIC_IP}:/tmp/
