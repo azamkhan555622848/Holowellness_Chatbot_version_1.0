@@ -8,6 +8,9 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
     
     steps:
     - name: Checkout code
@@ -86,46 +89,48 @@ jobs:
         aws s3 cp holowellness-deployment.tar.gz s3://holowellness-deployments-${{ github.run_number }}/
         
         echo "DEPLOYMENT_BUCKET=holowellness-deployments-${{ github.run_number }}" >> $GITHUB_ENV
-        
-    - name: Deploy Infrastructure
+    
+    - name: Resolve EC2 instance (reuse existing)
+      id: resolve-ec2
       run: |
-        # Make deployment scripts executable
-        chmod +x deploy/*.sh
-        
-        # Set environment variables for deployment
-        export REPO_URL="${{ github.repository }}"
-        export DEPLOYMENT_BUCKET="${{ env.DEPLOYMENT_BUCKET }}"
-        
-        # Run infrastructure setup
-        ./deploy/aws-setup.sh
-        
-    - name: Get Instance Information
-      id: instance-info
-      run: |
-        if [ -f "instance-info.txt" ]; then
-          source instance-info.txt
-          echo "instance-ip=$INSTANCE_IP" >> $GITHUB_OUTPUT
-          echo "instance-id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-          echo "key-name=$KEY_NAME" >> $GITHUB_OUTPUT
+        set -e
+        ID="${EC2_INSTANCE_ID}"
+        if [ -z "$ID" ] || [ "$ID" = "null" ]; then
+          # Fallback: find by Name tag
+          ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=HoloWellness-Server" "Name=instance-state-name,Values=running,stopped" \
+            --query "Reservations[].Instances[].InstanceId" --output text | head -n1)
         fi
-        
-    - name: Deploy Application
-      if: steps.instance-info.outputs.instance-ip != ''
-      run: |
-        # Wait for instance to be ready
-        sleep 120
-        
-        # Verify SSH key file exists (created by aws-setup.sh)
-        if [ ! -f "holowellness-key.pem" ]; then
-          echo "❌ SSH key file not found! Check aws-setup.sh execution."
+        if [ -z "$ID" ]; then
+          echo "No target EC2 instance found. Set repository variable EC2_INSTANCE_ID or tag an instance Name=HoloWellness-Server" >&2
           exit 1
         fi
+        # Ensure instance is running
+        aws ec2 start-instances --instance-ids "$ID" >/dev/null || true
+        aws ec2 wait instance-running --instance-ids "$ID"
         
-        # Ensure correct permissions on SSH key
-        chmod 400 holowellness-key.pem
-        ls -l holowellness-key.pem
-        
-        # Create deployment script for remote execution  
+        AZ=$(aws ec2 describe-instances --instance-ids "$ID" --query 'Reservations[0].Instances[0].Placement.AvailabilityZone' --output text)
+        IP=$(aws ec2 describe-instances --instance-ids "$ID" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+        echo "INSTANCE_ID=$ID" >> $GITHUB_ENV
+        echo "PUBLIC_IP=$IP" >> $GITHUB_ENV
+        echo "AVAILABILITY_ZONE=$AZ" >> $GITHUB_ENV
+        echo "instance-ip=$IP" >> $GITHUB_OUTPUT
+        echo "instance-id=$ID" >> $GITHUB_OUTPUT
+
+    - name: Push ephemeral SSH key (EC2 Instance Connect)
+      if: steps.resolve-ec2.outputs.instance-ip != ''
+      run: |
+        sudo apt-get update && sudo apt-get install -y openssh-client
+        ssh-keygen -t rsa -b 4096 -f ~/.ssh/holowellness -N "" <<< y
+        aws ec2-instance-connect send-ssh-public-key \
+          --instance-id "${INSTANCE_ID}" --availability-zone "${AVAILABILITY_ZONE}" \
+          --instance-os-user ubuntu \
+          --ssh-public-key file://~/.ssh/holowellness.pub
+
+    - name: Deploy Application via EC2 Instance Connect
+      if: steps.resolve-ec2.outputs.instance-ip != ''
+      run: |
+        # Create deployment script for remote execution
         cat > remote-deploy.sh << 'EOF'
         #!/bin/bash
         set -e
@@ -136,11 +141,6 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y awscli
         fi
-        
-        # Configure AWS credentials on EC2 instance
-        export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
-        export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
-        export AWS_DEFAULT_REGION="${{ secrets.AWS_REGION }}"
         
         # Download and extract deployment package
         aws s3 cp s3://${{ env.DEPLOYMENT_BUCKET }}/holowellness-deployment.tar.gz /tmp/
@@ -196,6 +196,7 @@ jobs:
         export FLASK_ENV=production
         export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
         export MONGO_URI="${{ secrets.MONGO_URI }}"
+        export OPENROUTER_MODEL="openai/gpt-oss-120b"
         
         # Start the Flask application with gunicorn (production WSGI server)
         echo "🚀 Starting Flask application with Gunicorn..."
@@ -239,7 +240,14 @@ jobs:
         }
         
         # Start gunicorn with explicit module path and environment variables
-        nohup env FLASK_ENV=production OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}" MONGO_URI="${{ secrets.MONGO_URI }}" venv/bin/gunicorn --config gunicorn.conf.py app:app > gunicorn.log 2>&1 &
+        # Persist important app env for future restarts
+        printf '%s\n' \
+          "FLASK_ENV=production" \
+          "OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}" \
+          "OPENROUTER_MODEL=${OPENROUTER_MODEL}" \
+          >> /opt/holowellness/.env || true
+
+        nohup env FLASK_ENV=production OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}" OPENROUTER_MODEL="${OPENROUTER_MODEL}" MONGO_URI="${{ secrets.MONGO_URI }}" venv/bin/gunicorn --config gunicorn.conf.py app:app > gunicorn.log 2>&1 &
         GUNICORN_PID=$!
         
         echo "⏳ Waiting for application to start..."
@@ -288,19 +296,20 @@ jobs:
         
         echo "   ✅ Application started successfully"
         EOF
+        EOF
         
-        # Copy and execute deployment script on remote instance
-        scp -i holowellness-key.pem -o StrictHostKeyChecking=no remote-deploy.sh ubuntu@${{ steps.instance-info.outputs.instance-ip }}:/tmp/
-        ssh -i holowellness-key.pem -o StrictHostKeyChecking=no ubuntu@${{ steps.instance-info.outputs.instance-ip }} "chmod +x /tmp/remote-deploy.sh && /tmp/remote-deploy.sh"
-        
+        # Copy and execute deployment script on remote instance using EIC key
+        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no remote-deploy.sh ubuntu@${PUBLIC_IP}:/tmp/
+        ssh -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP} "chmod +x /tmp/remote-deploy.sh && /tmp/remote-deploy.sh"
+    
     - name: Health Check
-      if: steps.instance-info.outputs.instance-ip != ''
+      if: steps.resolve-ec2.outputs.instance-ip != ''
       run: |
         # Wait for application to start
         sleep 30
         
         # Test health endpoint
-        HEALTH_URL="http://${{ steps.instance-info.outputs.instance-ip }}/health"
+        HEALTH_URL="http://${PUBLIC_IP}/health"
         echo "Testing health endpoint: $HEALTH_URL"
         
         for i in {1..10}; do
@@ -314,26 +323,26 @@ jobs:
         done
         
     - name: Deployment Summary
-      if: steps.instance-info.outputs.instance-ip != ''
+      if: steps.resolve-ec2.outputs.instance-ip != ''
       run: |
         echo "🎉 Deployment completed successfully!"
-        echo "📍 Instance IP: ${{ steps.instance-info.outputs.instance-ip }}"
-        echo "🔗 Health Check: http://${{ steps.instance-info.outputs.instance-ip }}/health"
-        echo "🤖 API Endpoint: http://${{ steps.instance-info.outputs.instance-ip }}/api/chat"
-        echo "🌐 Application: http://${{ steps.instance-info.outputs.instance-ip }}/"
+        echo "📍 Instance IP: ${PUBLIC_IP}"
+        echo "🔗 Health Check: http://${PUBLIC_IP}/health"
+        echo "🤖 API Endpoint: http://${PUBLIC_IP}/api/chat"
+        echo "🌐 Application: http://${PUBLIC_IP}/"
         
         # Save deployment info as artifact
         cat > deployment-info.txt << EOF
-        Instance IP: ${{ steps.instance-info.outputs.instance-ip }}
-        Instance ID: ${{ steps.instance-info.outputs.instance-id }}
-        Health Check: http://${{ steps.instance-info.outputs.instance-ip }}/health
-        API Endpoint: http://${{ steps.instance-info.outputs.instance-ip }}/api/chat
-        Application URL: http://${{ steps.instance-info.outputs.instance-ip }}/
+        Instance IP: ${PUBLIC_IP}
+        Instance ID: ${INSTANCE_ID}
+        Health Check: http://${PUBLIC_IP}/health
+        API Endpoint: http://${PUBLIC_IP}/api/chat
+        Application URL: http://${PUBLIC_IP}/
         Deployment Time: $(date)
         EOF
         
     - name: Upload deployment info
-      if: steps.instance-info.outputs.instance-ip != ''
+      if: steps.resolve-ec2.outputs.instance-ip != ''
       uses: actions/upload-artifact@v4
       with:
         name: deployment-info
