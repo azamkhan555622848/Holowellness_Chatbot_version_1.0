@@ -299,10 +299,11 @@ def chat():
                 
                 # Use the same/deploy-compatible model as main RAG path, configurable via env
                 model_name = os.getenv('OPENROUTER_MODEL', 'deepseek/deepseek-r1-distill-qwen-14b')
+                max_tokens_env = int(os.getenv('OPENROUTER_MAX_TOKENS', '1000'))
                 data = {
                     "model": model_name,
                     "messages": messages,
-                    "max_tokens": 1000,
+                    "max_tokens": max_tokens_env,
                     "temperature": 0.1
                 }
                 

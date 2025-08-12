@@ -198,6 +198,7 @@ jobs:
         OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
         OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
         OPENROUTER_MODEL="${OPENROUTER_MODEL_VAL}"
+        OPENROUTER_MAX_TOKENS="1200"
         APP_PUBLIC_URL="http://${PUBIP}"
         APP_TITLE="HoloWellness Chatbot"
 

@@ -52,11 +52,13 @@ class OpenRouterClient:
 
         # Prefer direct requests path for robust error reporting
         try:
+            max_tokens_env = int(os.getenv("OPENROUTER_MAX_TOKENS", "1000"))
             payload = {
                 "model": self.model_name,
                 "messages": messages,
                 "temperature": options.get("temperature", 0.2),
-                "max_tokens": options.get("num_predict", 600),
+                # Prefer option override, else env, else reasonable default
+                "max_tokens": options.get("num_predict", max_tokens_env),
                 "top_p": options.get("top_p", 0.9),
             }
             if "stop" in options and options["stop"]:
