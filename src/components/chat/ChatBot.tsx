@@ -30,6 +30,44 @@ export const ChatBot = () => {
     if (savedSessionId) setSessionId(savedSessionId);
   }, []);
 
+  // Basic fetch with timeout and simple retry for transient 502/504
+  const fetchWithRetry = async (
+    input: RequestInfo | URL,
+    init: RequestInit,
+    options: { timeoutMs?: number; retries?: number; backoffMs?: number } = {}
+  ): Promise<Response> => {
+    const timeoutMs = options.timeoutMs ?? 20000;
+    let retries = options.retries ?? 2;
+    const backoffMs = options.backoffMs ?? 800;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(input, { ...init, signal: controller.signal });
+        clearTimeout(timer);
+        if (res.ok) return res;
+        // Retry on gateway errors
+        if ((res.status === 502 || res.status === 504) && retries > 0) {
+          await new Promise((r) => setTimeout(r, backoffMs));
+          retries -= 1;
+          continue;
+        }
+        return res;
+      } catch (err) {
+        clearTimeout(timer);
+        // Network error or timeout → retry if budget remains
+        if (retries > 0) {
+          await new Promise((r) => setTimeout(r, backoffMs));
+          retries -= 1;
+          continue;
+        }
+        throw err;
+      }
+    }
+  };
+
   const handleSendMessage = async (message: string) => {
     setMessages((prev) => [
       ...prev,
@@ -55,13 +93,14 @@ export const ChatBot = () => {
       };
       if (sessionId) payload.session_id = sessionId;
 
-      const response = await fetch(
+      const response = await fetchWithRetry(
         "/api/chat",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
-        }
+        },
+        { timeoutMs: 30000, retries: 2, backoffMs: 1000 }
       );
 
       clearInterval(intervalId);
