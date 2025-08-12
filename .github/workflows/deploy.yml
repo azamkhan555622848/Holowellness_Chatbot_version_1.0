@@ -288,12 +288,20 @@ jobs:
               '    listen 80;' \
               '    server_name _;' \
               '' \
+              '    # Increase timeouts for upstream to avoid 502 on slow responses' \
+              '    proxy_connect_timeout 75s;' \
+              '    proxy_send_timeout 75s;' \
+              '    proxy_read_timeout 75s;' \
+              '    send_timeout 75s;' \
+              '' \
               '    location / {' \
               '        proxy_pass http://127.0.0.1:5000;' \
               '        proxy_set_header Host $host;' \
               '        proxy_set_header X-Real-IP $remote_addr;' \
               '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;' \
               '        proxy_set_header X-Forwarded-Proto $scheme;' \
+              '        proxy_http_version 1.1;' \
+              '        proxy_set_header Connection "";' \
               '    }' \
               '}' | sudo tee /etc/nginx/sites-available/holowellness > /dev/null
             
@@ -349,6 +357,33 @@ jobs:
         CHAT_URL="http://${PUBLIC_IP}/api/chat"
         echo "Testing API endpoint: $CHAT_URL"
         curl -s -H 'Content-Type: application/json' --data '{"query":"hello"}' "$CHAT_URL" || true
+
+    - name: Collect remote diagnostics and logs
+      if: steps.resolve-ec2.outputs.instance-ip != ''
+      run: |
+        mkdir -p logs
+        ssh -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP} '
+          set -euo pipefail
+          sudo tail -n 200 /var/log/nginx/error.log > /tmp/nginx-error.log || true
+          sudo tail -n 200 /var/log/nginx/access.log > /tmp/nginx-access.log || true
+          tail -n 400 /opt/holowellness/gunicorn.log > /tmp/gunicorn.log || true
+          ss -tlnp | grep :5000 > /tmp/ss-5000.txt || true
+          ps aux | grep gunicorn > /tmp/ps-gunicorn.txt || true
+          curl -s -i http://127.0.0.1:5000/health > /tmp/local-health.txt || true
+        '
+        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/nginx-error.log logs/ || true
+        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/nginx-access.log logs/ || true
+        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/gunicorn.log logs/ || true
+        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/ss-5000.txt logs/ || true
+        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/ps-gunicorn.txt logs/ || true
+        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/local-health.txt logs/ || true
+
+    - name: Upload diagnostics logs
+      if: steps.resolve-ec2.outputs.instance-ip != ''
+      uses: actions/upload-artifact@v4
+      with:
+        name: diagnostics-logs
+        path: logs/
         
     - name: Deployment Summary
       if: steps.resolve-ec2.outputs.instance-ip != ''
