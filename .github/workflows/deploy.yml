@@ -177,26 +177,43 @@ jobs:
         
         echo "   ✅ Python environment ready"
         
-        # Configure environment
+        # Configure environment from GitHub Secrets/Vars → write to /opt/holowellness/.env
         echo ""
-        echo "⚙️  Step 3: Configuring Environment..."
-        if [ -f ".env.production" ]; then
-            cp .env.production .env
-            echo "   ✅ Production environment configured"
-        else
-            echo "   ⚠️  .env.production not found, creating from example..."
-            if [ -f ".env.example" ]; then
-                cp .env.example .env
-                echo "   Please edit .env with your actual credentials"
-            fi
-        fi
-        
+        echo "⚙️  Step 3: Configuring Environment (.env from GitHub secrets/vars)..."
+        PUBIP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || true)
+        [ -z "$PUBIP" ] && PUBIP="127.0.0.1"
+        OPENROUTER_MODEL_VAL="${{ vars.OPENROUTER_MODEL }}"
+        [ -z "$OPENROUTER_MODEL_VAL" ] && OPENROUTER_MODEL_VAL="openrouter/gpt-oss-20b"
+        CORS_EXTRA="${{ vars.CORS_EXTRA_ORIGINS }}"
+        [ -n "$CORS_EXTRA" ] && CORS_EXTRA=",$CORS_EXTRA"
+        SECRET_VAL="${{ secrets.SECRET_KEY }}"
+        [ -z "$SECRET_VAL" ] && SECRET_VAL="holowellness-production-secret-key-2024"
+
+        sudo bash -lc "cat > /opt/holowellness/.env <<ENVEOF"
+        FLASK_ENV=production
+        DEBUG=False
+        SECRET_KEY=${SECRET_VAL}
+        CORS_ORIGINS=http://${PUBIP},http://localhost:3000${CORS_EXTRA}
+
+        OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+        OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+        OPENROUTER_MODEL=${OPENROUTER_MODEL_VAL}
+
+        MONGO_URI=${{ secrets.MONGO_URI }}
+        AWS_REGION=${{ secrets.AWS_REGION }}
+
+        LOG_LEVEL=INFO
+        CACHE_TTL=3600
+        MAX_CACHE_SIZE=1000
+        DEFAULT_CHATBOT_ID=507f1f77bcf86cd799439011
+        ENVEOF
+
         # Continue with the rest of the deployment
         cd /opt/holowellness
         export FLASK_ENV=production
         export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
         export MONGO_URI="${{ secrets.MONGO_URI }}"
-        export OPENROUTER_MODEL="openai/gpt-oss-120b"
+        export OPENROUTER_MODEL="$OPENROUTER_MODEL_VAL"
         
         # Start the Flask application with gunicorn (production WSGI server)
         echo "🚀 Starting Flask application with Gunicorn..."
@@ -240,14 +257,11 @@ jobs:
         }
         
         # Start gunicorn with explicit module path and environment variables
-        # Persist important app env for future restarts
-        printf '%s\n' \
-          "FLASK_ENV=production" \
-          "OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}" \
-          "OPENROUTER_MODEL=${OPENROUTER_MODEL}" \
-          >> /opt/holowellness/.env || true
-
-        nohup env FLASK_ENV=production OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}" OPENROUTER_MODEL="${OPENROUTER_MODEL}" MONGO_URI="${{ secrets.MONGO_URI }}" venv/bin/gunicorn --config gunicorn.conf.py app:app > gunicorn.log 2>&1 &
+        # Load from .env for consistency across restarts
+        set -a
+        [ -f /opt/holowellness/.env ] && . /opt/holowellness/.env
+        set +a
+        nohup env FLASK_ENV=production OPENROUTER_API_KEY="$OPENROUTER_API_KEY" OPENROUTER_MODEL="$OPENROUTER_MODEL" MONGO_URI="$MONGO_URI" venv/bin/gunicorn --config gunicorn.conf.py app:app > gunicorn.log 2>&1 &
         GUNICORN_PID=$!
         
         echo "⏳ Waiting for application to start..."
