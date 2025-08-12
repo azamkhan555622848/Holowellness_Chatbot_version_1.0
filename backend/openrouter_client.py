@@ -67,16 +67,57 @@ class OpenRouterClient:
             headers = {
                 "Authorization": f"Bearer {self.api_key}" if self.api_key else "",
                 "Content-Type": "application/json",
+                "Accept": "application/json",
                 # Optional but helpful for OpenRouter analytics
                 "HTTP-Referer": os.getenv("APP_PUBLIC_URL", "http://localhost"),
                 "X-Title": os.getenv("APP_TITLE", "HoloWellness Chatbot"),
             }
             url = f"{self.base_url}/chat/completions"
             logger.info(f"Calling OpenRouter via requests with model={self.model_name}")
-            r: Response = requests.post(url, headers=headers, json=payload, timeout=self.timeout_seconds)
-            if r.status_code != 200:
-                logger.error(f"OpenRouter HTTP {r.status_code}: {r.text[:500]}")
-                raise RuntimeError(f"OpenRouter HTTP {r.status_code}")
+
+            # Simple retry for transient upstream failures
+            retries = int(os.getenv("OPENROUTER_RETRIES", "2"))
+            backoff_base_ms = int(os.getenv("OPENROUTER_BACKOFF_MS", "500"))
+            last_err: Exception | None = None
+            for attempt in range(retries + 1):
+                try:
+                    r: Response = requests.post(
+                        url, headers=headers, json=payload, timeout=self.timeout_seconds
+                    )
+                    if r.status_code == 200:
+                        break
+                    # Retry on common transient statuses
+                    if r.status_code in (429, 500, 502, 503, 504):
+                        logger.warning(
+                            f"OpenRouter transient HTTP {r.status_code} (attempt {attempt+1}/{retries+1})"
+                        )
+                        last_err = RuntimeError(f"OpenRouter HTTP {r.status_code}")
+                    else:
+                        logger.error(f"OpenRouter HTTP {r.status_code}: {r.text[:500]}")
+                        raise RuntimeError(f"OpenRouter HTTP {r.status_code}")
+                except requests.RequestException as re:
+                    last_err = re
+                    logger.warning(
+                        f"OpenRouter request exception {type(re).__name__} (attempt {attempt+1}/{retries+1}): {re}"
+                    )
+
+                # Backoff before next attempt if not last
+                if attempt < retries:
+                    delay = (backoff_base_ms * (attempt + 1)) / 1000.0
+                    try:
+                        import time as _time
+                        _time.sleep(delay)
+                    except Exception:
+                        pass
+            else:
+                # Should not reach; loop exits via break or falls through
+                pass
+
+            if 'r' not in locals() or r.status_code != 200:
+                # Exceeded retries
+                if last_err:
+                    raise last_err
+                raise RuntimeError("OpenRouter request failed")
 
             data = r.json()
             content = data["choices"][0]["message"]["content"].strip()
