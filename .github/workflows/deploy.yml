@@ -242,7 +242,8 @@ jobs:
         cat > gunicorn.conf.py << 'GUNICORN_CONFIG'
         bind = "0.0.0.0:5000"
         workers = 2
-        timeout = 120
+        # Increase timeout to accommodate slower CPU inference
+        timeout = 180
         keepalive = 5
         max_requests = 1000
         preload_app = True
@@ -289,10 +290,11 @@ jobs:
               '    server_name _;' \
               '' \
               '    # Increase timeouts for upstream to avoid 502 on slow responses' \
-              '    proxy_connect_timeout 75s;' \
-              '    proxy_send_timeout 75s;' \
-              '    proxy_read_timeout 75s;' \
-              '    send_timeout 75s;' \
+              '    proxy_connect_timeout 60s;' \
+              '    proxy_send_timeout 180s;' \
+              '    proxy_read_timeout 180s;' \
+              '    send_timeout 180s;' \
+              '    client_max_body_size 10m;' \
               '' \
               '    location / {' \
               '        proxy_pass http://127.0.0.1:5000;' \
