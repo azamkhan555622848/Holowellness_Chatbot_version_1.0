@@ -192,17 +192,17 @@ jobs:
         sudo tee /opt/holowellness/.env >/dev/null <<ENVEOF
         FLASK_ENV=production
         DEBUG=False
-        SECRET_KEY=${SECRET_VAL}
-        CORS_ORIGINS=http://${PUBIP},http://localhost:3000${CORS_EXTRA}
+        SECRET_KEY="${SECRET_VAL}"
+        CORS_ORIGINS="http://${PUBIP},http://localhost:3000${CORS_EXTRA}"
 
-        OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
-        OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-        OPENROUTER_MODEL=${OPENROUTER_MODEL_VAL}
-        APP_PUBLIC_URL=http://${PUBIP}
-        APP_TITLE=HoloWellness Chatbot
+        OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
+        OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
+        OPENROUTER_MODEL="${OPENROUTER_MODEL_VAL}"
+        APP_PUBLIC_URL="http://${PUBIP}"
+        APP_TITLE="HoloWellness Chatbot"
 
-        MONGO_URI=${{ secrets.MONGO_URI }}
-        AWS_REGION=${{ secrets.AWS_REGION }}
+        MONGO_URI="${{ secrets.MONGO_URI }}"
+        AWS_REGION="${{ secrets.AWS_REGION }}"
 
         LOG_LEVEL=INFO
         CACHE_TTL=3600
