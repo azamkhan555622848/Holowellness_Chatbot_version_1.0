@@ -199,8 +199,9 @@ jobs:
         OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
         OPENROUTER_MODEL="${OPENROUTER_MODEL_VAL}"
         OPENROUTER_MAX_TOKENS="1200"
-        OPENROUTER_RETRIES="2"
-        OPENROUTER_BACKOFF_MS="700"
+        OPENROUTER_RETRIES="3"
+        OPENROUTER_BACKOFF_MS="1000"
+        OPENROUTER_TIMEOUT="45"
         APP_PUBLIC_URL="http://${PUBIP}"
         APP_TITLE="HoloWellness Chatbot"
 
@@ -244,9 +245,9 @@ jobs:
         # Create a gunicorn config for better logging
         cat > gunicorn.conf.py << 'GUNICORN_CONFIG'
         bind = "0.0.0.0:5000"
-        workers = 2
+        workers = 3
         # Increase timeout to accommodate slower CPU inference
-        timeout = 180
+        timeout = 300
         keepalive = 5
         max_requests = 1000
         preload_app = True
@@ -294,9 +295,9 @@ jobs:
               '' \
               '    # Increase timeouts for upstream to avoid 502 on slow responses' \
               '    proxy_connect_timeout 60s;' \
-              '    proxy_send_timeout 180s;' \
-              '    proxy_read_timeout 180s;' \
-              '    send_timeout 180s;' \
+              '    proxy_send_timeout 300s;' \
+              '    proxy_read_timeout 300s;' \
+              '    send_timeout 300s;' \
               '    client_max_body_size 10m;' \
               '' \
               '    location / {' \

@@ -100,7 +100,7 @@ export const ChatBot = () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         },
-        { timeoutMs: 30000, retries: 2, backoffMs: 1000 }
+        { timeoutMs: 45000, retries: 3, backoffMs: 1200 }
       );
 
       clearInterval(intervalId);
