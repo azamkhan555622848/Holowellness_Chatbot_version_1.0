@@ -358,11 +358,21 @@ jobs:
         echo "Testing API endpoint: $CHAT_URL"
         curl -s -H 'Content-Type: application/json' --data '{"query":"hello"}' "$CHAT_URL" || true
 
+    - name: Refresh EC2 Instance Connect key (for diagnostics)
+      if: steps.resolve-ec2.outputs.instance-ip != ''
+      run: |
+        # Re-send ephemeral SSH public key as EIC keys expire quickly
+        aws ec2-instance-connect send-ssh-public-key \
+          --instance-id "${INSTANCE_ID}" \
+          --availability-zone "${AVAILABILITY_ZONE}" \
+          --instance-os-user ubuntu \
+          --ssh-public-key file://~/.ssh/holowellness.pub
+
     - name: Collect remote diagnostics and logs
       if: steps.resolve-ec2.outputs.instance-ip != ''
       run: |
         mkdir -p logs
-        ssh -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP} '
+        ssh -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP} '
           set -euo pipefail
           sudo tail -n 200 /var/log/nginx/error.log > /tmp/nginx-error.log || true
           sudo tail -n 200 /var/log/nginx/access.log > /tmp/nginx-access.log || true
@@ -371,12 +381,12 @@ jobs:
           ps aux | grep gunicorn > /tmp/ps-gunicorn.txt || true
           curl -s -i http://127.0.0.1:5000/health > /tmp/local-health.txt || true
         '
-        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/nginx-error.log logs/ || true
-        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/nginx-access.log logs/ || true
-        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/gunicorn.log logs/ || true
-        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/ss-5000.txt logs/ || true
-        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/ps-gunicorn.txt logs/ || true
-        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/local-health.txt logs/ || true
+        scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/nginx-error.log logs/ || true
+        scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/nginx-access.log logs/ || true
+        scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/gunicorn.log logs/ || true
+        scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/ss-5000.txt logs/ || true
+        scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/ps-gunicorn.txt logs/ || true
+        scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/local-health.txt logs/ || true
 
     - name: Upload diagnostics logs
       if: steps.resolve-ec2.outputs.instance-ip != ''
