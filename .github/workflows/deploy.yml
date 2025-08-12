@@ -207,6 +207,8 @@ jobs:
         MAX_CACHE_SIZE=1000
         DEFAULT_CHATBOT_ID=507f1f77bcf86cd799439011
         ENVEOF
+        # Normalize: strip any leading spaces introduced by YAML indentation
+        sudo sed -i 's/^\s\+//' /opt/holowellness/.env
 
         # Continue with the rest of the deployment
         cd /opt/holowellness
