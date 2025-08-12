@@ -198,6 +198,8 @@ jobs:
         OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
         OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
         OPENROUTER_MODEL=${OPENROUTER_MODEL_VAL}
+        APP_PUBLIC_URL=http://${PUBIP}
+        APP_TITLE=HoloWellness Chatbot
 
         MONGO_URI=${{ secrets.MONGO_URI }}
         AWS_REGION=${{ secrets.AWS_REGION }}
@@ -216,6 +218,8 @@ jobs:
         export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
         export MONGO_URI="${{ secrets.MONGO_URI }}"
         export OPENROUTER_MODEL="$OPENROUTER_MODEL_VAL"
+        export APP_PUBLIC_URL="http://${PUBIP}"
+        export APP_TITLE="HoloWellness Chatbot"
         
         # Start the Flask application with gunicorn (production WSGI server)
         echo "🚀 Starting Flask application with Gunicorn..."
@@ -228,6 +232,8 @@ jobs:
         export OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
         export MONGO_URI="${{ secrets.MONGO_URI }}"
         export PYTHONPATH="/opt/holowellness:$PYTHONPATH"
+        export APP_PUBLIC_URL="http://${PUBIP}"
+        export APP_TITLE="HoloWellness Chatbot"
         
         # Kill any existing processes on port 5000 (use 5000 instead of 80 to avoid permission issues)
         sudo fuser -k 5000/tcp || true
@@ -336,6 +342,13 @@ jobs:
             sleep 30
           fi
         done
+    
+    - name: API Smoke Test
+      if: steps.resolve-ec2.outputs.instance-ip != ''
+      run: |
+        CHAT_URL="http://${PUBLIC_IP}/api/chat"
+        echo "Testing API endpoint: $CHAT_URL"
+        curl -s -H 'Content-Type: application/json' --data '{"query":"hello"}' "$CHAT_URL" || true
         
     - name: Deployment Summary
       if: steps.resolve-ec2.outputs.instance-ip != ''
