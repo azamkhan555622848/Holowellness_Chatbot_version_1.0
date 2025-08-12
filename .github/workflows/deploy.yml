@@ -189,7 +189,7 @@ jobs:
         SECRET_VAL="${{ secrets.SECRET_KEY }}"
         [ -z "$SECRET_VAL" ] && SECRET_VAL="holowellness-production-secret-key-2024"
 
-        sudo bash -lc "cat > /opt/holowellness/.env <<ENVEOF"
+        sudo tee /opt/holowellness/.env >/dev/null <<ENVEOF
         FLASK_ENV=production
         DEBUG=False
         SECRET_KEY=${SECRET_VAL}
