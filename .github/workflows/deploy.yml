@@ -183,7 +183,7 @@ jobs:
         PUBIP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || true)
         [ -z "$PUBIP" ] && PUBIP="127.0.0.1"
         OPENROUTER_MODEL_VAL="${{ vars.OPENROUTER_MODEL }}"
-        [ -z "$OPENROUTER_MODEL_VAL" ] && OPENROUTER_MODEL_VAL="openrouter/gpt-oss-20b"
+        [ -z "$OPENROUTER_MODEL_VAL" ] && OPENROUTER_MODEL_VAL="deepseek/deepseek-r1-distill-qwen-14b"
         CORS_EXTRA="${{ vars.CORS_EXTRA_ORIGINS }}"
         [ -n "$CORS_EXTRA" ] && CORS_EXTRA=",$CORS_EXTRA"
         SECRET_VAL="${{ secrets.SECRET_KEY }}"

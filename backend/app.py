@@ -291,11 +291,16 @@ def chat():
                 
                 headers = {
                     "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    # Helpful for OpenRouter routing/allowlist
+                    "HTTP-Referer": os.getenv('APP_PUBLIC_URL', 'http://127.0.0.1'),
+                    "X-Title": os.getenv('APP_TITLE', 'HoloWellness Chatbot')
                 }
                 
+                # Use the same/deploy-compatible model as main RAG path, configurable via env
+                model_name = os.getenv('OPENROUTER_MODEL', 'deepseek/deepseek-r1-distill-qwen-14b')
                 data = {
-                    "model": "openai/gpt-oss-120b",
+                    "model": model_name,
                     "messages": messages,
                     "max_tokens": 1000,
                     "temperature": 0.1

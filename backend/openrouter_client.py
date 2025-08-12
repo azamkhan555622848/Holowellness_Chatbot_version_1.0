@@ -24,7 +24,8 @@ class OpenRouterClient:
     def __init__(self):
         self.api_key = os.getenv("OPENROUTER_API_KEY")
         self.base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-        self.model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b")
+        # Default to the deployed DeepSeek model; override via OPENROUTER_MODEL
+        self.model_name = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-r1-distill-qwen-14b")
         self.timeout_seconds = int(os.getenv("OPENROUTER_TIMEOUT", "30"))
         # Prepare optional fallback OpenAI client
         self.client = None
