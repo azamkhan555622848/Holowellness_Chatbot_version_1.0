@@ -6,6 +6,7 @@ import os
 import logging
 import uuid
 from dotenv import load_dotenv
+import concurrent.futures
 from memory_manager import memory_manager
 from bson.json_util import dumps
 from bson import ObjectId, errors
@@ -138,6 +139,17 @@ except Exception as sync_err:
 
 DEFAULT_CHATBOT_ID = "664123456789abcdef123456"
 
+# Optional: allow disabling reranker via env if enhanced RAG is used
+try:
+    if USE_ENHANCED_RAG and rag is not None and os.getenv('DISABLE_RERANKER', 'false').lower() == 'true':
+        if hasattr(rag, 'reranker'):
+            rag.reranker = None
+        if hasattr(rag, 'reranker_model_name'):
+            rag.reranker_model_name = None
+        logger.warning("DISABLE_RERANKER=true → Reranker disabled at runtime")
+except Exception:
+    logger.exception("Failed to apply DISABLE_RERANKER flag")
+
 
 @app.route('/', methods=['GET'])
 def index():
@@ -255,12 +267,20 @@ def chat():
             logger.info(f"🤖 Starting RAG generation for query: {query[:50]}...")
             logger.info(f"🔧 RAG system available: {rag is not None}")
             logger.info(f"🔑 OpenRouter API Key configured: {bool(os.getenv('OPENROUTER_API_KEY'))}")
-            
-            response_data = rag.generate_answer(query, conversation_history)
+
+            # Enforce a soft timeout around RAG end-to-end generation
+            rag_timeout_s = int(os.getenv('RAG_TIMEOUT_SECONDS', '45'))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(rag.generate_answer, query, conversation_history)
+                try:
+                    response_data = future.result(timeout=rag_timeout_s)
+                except concurrent.futures.TimeoutError:
+                    raise Exception(f"RAG timeout after {rag_timeout_s}s")
+
             content = response_data.get("content", "")
             thinking = response_data.get("thinking", "")
             retrieved_context = response_data.get("retrieved_context", "")
-            
+
             logger.info(f"✅ RAG generation successful, content length: {len(content)}")
         except Exception as e:
             logger.error(f"❌ RAG/LLM generation error: {e}", exc_info=True)
@@ -312,7 +332,7 @@ def chat():
                     "https://openrouter.ai/api/v1/chat/completions",
                     headers=headers,
                     json=data,
-                    timeout=30
+                    timeout=int(os.getenv('OPENROUTER_TIMEOUT', '60'))
                 )
                 
                 if response.status_code == 200:

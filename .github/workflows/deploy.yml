@@ -197,6 +197,10 @@ jobs:
         [ -z "$OPENROUTER_TIMEOUT_VAL" ] && OPENROUTER_TIMEOUT_VAL="60"
         OPENROUTER_MAX_TOKENS_VAL="${{ vars.OPENROUTER_MAX_TOKENS }}"
         [ -z "$OPENROUTER_MAX_TOKENS_VAL" ] && OPENROUTER_MAX_TOKENS_VAL="1000"
+        DISABLE_RERANKER_VAL="${{ vars.DISABLE_RERANKER }}"
+        [ -z "$DISABLE_RERANKER_VAL" ] && DISABLE_RERANKER_VAL="false"
+        RAG_TIMEOUT_SECONDS_VAL="${{ vars.RAG_TIMEOUT_SECONDS }}"
+        [ -z "$RAG_TIMEOUT_SECONDS_VAL" ] && RAG_TIMEOUT_SECONDS_VAL="45"
 
         sudo tee /opt/holowellness/.env >/dev/null <<ENVEOF
         FLASK_ENV=production
@@ -211,6 +215,8 @@ jobs:
         OPENROUTER_RETRIES="$OPENROUTER_RETRIES_VAL"
         OPENROUTER_BACKOFF_MS="$OPENROUTER_BACKOFF_VAL"
         OPENROUTER_TIMEOUT="$OPENROUTER_TIMEOUT_VAL"
+        DISABLE_RERANKER="$DISABLE_RERANKER_VAL"
+        RAG_TIMEOUT_SECONDS="$RAG_TIMEOUT_SECONDS_VAL"
         APP_PUBLIC_URL="http://${PUBIP}"
         APP_TITLE="HoloWellness Chatbot"
 
@@ -295,6 +301,18 @@ jobs:
         sudo systemctl daemon-reload
         sudo systemctl enable holowellness
         sudo systemctl restart holowellness
+
+        # Add small swapfile to reduce OOM risk on small instances
+        if ! sudo swapon --show | grep -q "/swapfile"; then
+          echo "📦 Adding 1G swapfile to improve stability on small instances"
+          sudo fallocate -l 1G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=1024
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          if ! grep -q "/swapfile" /etc/fstab; then
+            echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+          fi
+        fi
         
         echo "⏳ Waiting for application to start..."
         sleep 20
