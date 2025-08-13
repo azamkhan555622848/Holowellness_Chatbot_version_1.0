@@ -378,20 +378,68 @@ def chat():
                 
                 if response.status_code == 200:
                     result = response.json()
-                    content = result['choices'][0]['message']['content']
+                    english_content = result['choices'][0]['message']['content']
                     thinking = "Direct API call (RAG system unavailable)"
                     retrieved_context = "No document retrieval (fallback mode)"
                     
+                    # IMPORTANT: Apply translation layer to fallback mode too
+                    try:
+                        # Use the same translation function as RAG system
+                        if rag and hasattr(rag, '_translate_to_traditional_chinese'):
+                            logger.info("🔄 Applying translation layer to fallback response...")
+                            translated_content = rag._translate_to_traditional_chinese(english_content)
+                        else:
+                            # Fallback translation using direct API call to translation model
+                            logger.info("🔄 Using direct translation for fallback...")
+                            translation_prompt = f"""請將以下英文醫療建議翻譯成繁體中文。保持專業的醫療語調，並確保翻譯準確且易於理解：
+
+原文：
+{english_content}
+
+繁體中文翻譯："""
+                            
+                            translation_headers = {
+                                "Authorization": f"Bearer {api_key}",
+                                "Content-Type": "application/json",
+                                "HTTP-Referer": os.getenv('APP_PUBLIC_URL', 'http://127.0.0.1'),
+                                "X-Title": os.getenv('APP_TITLE', 'HoloWellness Translation')
+                            }
+                            
+                            translation_data = {
+                                "model": "deepseek/deepseek-r1-distill-qwen-14b",
+                                "messages": [{"role": "user", "content": translation_prompt}],
+                                "max_tokens": 500,
+                                "temperature": 0.1
+                            }
+                            
+                            translation_response = requests.post(
+                                "https://openrouter.ai/api/v1/chat/completions",
+                                headers=translation_headers,
+                                json=translation_data,
+                                timeout=30
+                            )
+                            
+                            if translation_response.status_code == 200:
+                                translation_result = translation_response.json()
+                                translated_content = translation_result['choices'][0]['message']['content']
+                            else:
+                                logger.warning("Translation failed, using English content")
+                                translated_content = english_content
+                                
+                    except Exception as translation_error:
+                        logger.warning(f"Translation failed: {translation_error}, using English content")
+                        translated_content = english_content
+                    
                     # Create response_data structure for consistency with normal flow
                     response_data = {
-                        "content": content,
+                        "content": translated_content,
                         "thinking": thinking,
                         "retrieved_context": retrieved_context,
                         "reranked": False,
                         "num_sources": 0
                     }
                     
-                    logger.info(f"✅ Fallback successful, content length: {len(content)}")
+                    logger.info(f"✅ Fallback successful, content length: {len(translated_content)}")
                 else:
                     logger.error(f"❌ OpenRouter API error: {response.status_code} - {response.text}")
                     raise Exception(f"OpenRouter API error: {response.status_code}")
