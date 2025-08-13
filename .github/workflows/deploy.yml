@@ -251,31 +251,40 @@ jobs:
         keepalive = 5
         max_requests = 1000
         preload_app = True
-        daemon = True
+        daemon = False
         user = "ubuntu"
         group = "ubuntu"
+        accesslog = "/opt/holowellness/gunicorn-access.log"
+        errorlog = "/opt/holowellness/gunicorn-error.log"
+        loglevel = "info"
         GUNICORN_CONFIG
         
-        # Start gunicorn from the virtual environment with proper paths
-        echo "📁 Current directory: $(pwd)"
-        echo "🐍 Python path: $PYTHONPATH"
-        
-        # Activate virtual environment and start gunicorn
-        source venv/bin/activate
-        python -c "import app; print('✅ App module can be imported')" || {
-            echo "❌ Failed to import app module"
-            python -c "import sys; print('Python path:', sys.path)"
-            ls -la
-            exit 1
-        }
-        
-        # Start gunicorn with explicit module path and environment variables
-        # Load from .env for consistency across restarts
-        set -a
-        [ -f /opt/holowellness/.env ] && . /opt/holowellness/.env
-        set +a
-        nohup env FLASK_ENV=production OPENROUTER_API_KEY="$OPENROUTER_API_KEY" OPENROUTER_MODEL="$OPENROUTER_MODEL" MONGO_URI="$MONGO_URI" venv/bin/gunicorn --config gunicorn.conf.py app:app > gunicorn.log 2>&1 &
-        GUNICORN_PID=$!
+        # Create systemd service for Gunicorn (ensures restart and boot persistence)
+        sudo tee /etc/systemd/system/holowellness.service >/dev/null <<'UNITEOF'
+        [Unit]
+        Description=HoloWellness Gunicorn Service
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        User=ubuntu
+        Group=ubuntu
+        WorkingDirectory=/opt/holowellness
+        EnvironmentFile=-/opt/holowellness/.env
+        ExecStart=/opt/holowellness/venv/bin/gunicorn --config /opt/holowellness/gunicorn.conf.py app:app
+        Restart=always
+        RestartSec=5
+        TimeoutSec=300
+        KillSignal=SIGQUIT
+        Type=simple
+
+        [Install]
+        WantedBy=multi-user.target
+        UNITEOF
+
+        sudo systemctl daemon-reload
+        sudo systemctl enable holowellness
+        sudo systemctl restart holowellness
         
         echo "⏳ Waiting for application to start..."
         sleep 20
@@ -288,6 +297,10 @@ jobs:
             PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
             
             # Configure simple nginx proxy to forward port 80 to 5000 (no heredoc to avoid YAML issues)
+            if ! command -v nginx >/dev/null 2>&1; then
+              sudo apt-get update
+              sudo apt-get install -y nginx
+            fi
             printf '%s\n' \
               'server {' \
               '    listen 80;' \
@@ -314,6 +327,7 @@ jobs:
             # Enable the site and restart nginx
             sudo ln -sf /etc/nginx/sites-available/holowellness /etc/nginx/sites-enabled/
             sudo rm -f /etc/nginx/sites-enabled/default
+            sudo systemctl enable nginx
             sudo systemctl restart nginx
             
             echo "🌐 Application accessible at: http://$PUBLIC_IP/"

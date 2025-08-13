@@ -108,7 +108,4 @@ When to choose self‑hosting
 - Swap instance types; monthly ≈ hourly_price × 720.
 - Scale S3 and egress linearly with actual usage.
 
-### Caveats
-- Replace model prices with your provider’s current quotes (OpenRouter, Groq, Together, Fireworks, DeepInfra, etc.).
-- Free‑tier eligibility varies by account, region, and instance family.
 
