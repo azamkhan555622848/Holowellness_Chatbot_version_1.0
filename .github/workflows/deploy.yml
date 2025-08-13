@@ -367,8 +367,8 @@ jobs:
             echo "📊 Health check: http://$PUBLIC_IP/health"
         else
             echo "❌ Flask application failed to start or not accessible"
-            echo "🔍 Gunicorn logs:"
-            cat gunicorn.log || echo "No log file found"
+            echo "🔍 Gunicorn error log:"
+            sudo tail -n 200 /opt/holowellness/gunicorn-error.log || echo "No error log found"
             echo "🔍 Checking process status:"
             ps aux | grep gunicorn || echo "No gunicorn processes found"
             echo "🔍 Checking port 5000:"
@@ -428,14 +428,14 @@ jobs:
           set -euo pipefail
           sudo tail -n 200 /var/log/nginx/error.log > /tmp/nginx-error.log || true
           sudo tail -n 200 /var/log/nginx/access.log > /tmp/nginx-access.log || true
-          tail -n 400 /opt/holowellness/gunicorn.log > /tmp/gunicorn.log || true
+          tail -n 400 /opt/holowellness/gunicorn-error.log > /tmp/gunicorn-error.log || true
           ss -tlnp | grep :5000 > /tmp/ss-5000.txt || true
           ps aux | grep gunicorn > /tmp/ps-gunicorn.txt || true
           curl -s -i http://127.0.0.1:5000/health > /tmp/local-health.txt || true
         '
         scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/nginx-error.log logs/ || true
         scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/nginx-access.log logs/ || true
-        scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/gunicorn.log logs/ || true
+        scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/gunicorn-error.log logs/ || true
         scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/ss-5000.txt logs/ || true
         scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/ps-gunicorn.txt logs/ || true
         scp -i ~/.ssh/holowellness -o IdentitiesOnly=yes -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP}:/tmp/local-health.txt logs/ || true
