@@ -188,6 +188,15 @@ jobs:
         [ -n "$CORS_EXTRA" ] && CORS_EXTRA=",$CORS_EXTRA"
         SECRET_VAL="${{ secrets.SECRET_KEY }}"
         [ -z "$SECRET_VAL" ] && SECRET_VAL="holowellness-production-secret-key-2024"
+        # Mitigation tuning via repo variables with safe defaults
+        OPENROUTER_RETRIES_VAL="${{ vars.OPENROUTER_RETRIES }}"
+        [ -z "$OPENROUTER_RETRIES_VAL" ] && OPENROUTER_RETRIES_VAL="5"
+        OPENROUTER_BACKOFF_VAL="${{ vars.OPENROUTER_BACKOFF_MS }}"
+        [ -z "$OPENROUTER_BACKOFF_VAL" ] && OPENROUTER_BACKOFF_VAL="1500"
+        OPENROUTER_TIMEOUT_VAL="${{ vars.OPENROUTER_TIMEOUT }}"
+        [ -z "$OPENROUTER_TIMEOUT_VAL" ] && OPENROUTER_TIMEOUT_VAL="60"
+        OPENROUTER_MAX_TOKENS_VAL="${{ vars.OPENROUTER_MAX_TOKENS }}"
+        [ -z "$OPENROUTER_MAX_TOKENS_VAL" ] && OPENROUTER_MAX_TOKENS_VAL="1000"
 
         sudo tee /opt/holowellness/.env >/dev/null <<ENVEOF
         FLASK_ENV=production
@@ -198,10 +207,10 @@ jobs:
         OPENROUTER_API_KEY="${{ secrets.OPENROUTER_API_KEY }}"
         OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
         OPENROUTER_MODEL="${OPENROUTER_MODEL_VAL}"
-        OPENROUTER_MAX_TOKENS="1200"
-        OPENROUTER_RETRIES="3"
-        OPENROUTER_BACKOFF_MS="1000"
-        OPENROUTER_TIMEOUT="45"
+        OPENROUTER_MAX_TOKENS="$OPENROUTER_MAX_TOKENS_VAL"
+        OPENROUTER_RETRIES="$OPENROUTER_RETRIES_VAL"
+        OPENROUTER_BACKOFF_MS="$OPENROUTER_BACKOFF_VAL"
+        OPENROUTER_TIMEOUT="$OPENROUTER_TIMEOUT_VAL"
         APP_PUBLIC_URL="http://${PUBIP}"
         APP_TITLE="HoloWellness Chatbot"
 
@@ -250,6 +259,7 @@ jobs:
         timeout = 300
         keepalive = 5
         max_requests = 1000
+        max_requests_jitter = 100
         preload_app = True
         daemon = False
         user = "ubuntu"
