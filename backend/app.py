@@ -297,9 +297,18 @@ def chat():
                 if not api_key:
                     raise Exception("No OpenRouter API key available")
                 
-                # Simple conversation without RAG retrieval
+                # System prompt to ensure clinically-sound, concise, rich guidance with a follow-up question
                 messages = [
-                    {"role": "system", "content": "You are a helpful wellness assistant. Provide helpful, accurate responses about health and wellness topics."}
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an experienced human wellness doctor. Respond in a calm, concise, and informative style. "
+                            "Provide actionable, evidence-informed guidance, structured with short paragraphs or bullet points when helpful. "
+                            "Be specific about home care, red flags, and when to seek in-person care. "
+                            "Tailor advice to the user's details if provided (age, activity, conditions, meds). "
+                            "End every answer with one brief follow-up question to clarify next steps or personalize care."
+                        ),
+                    }
                 ]
                 
                 # Add conversation history (limited to last 5 messages)

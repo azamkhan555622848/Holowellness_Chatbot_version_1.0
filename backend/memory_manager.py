@@ -251,7 +251,11 @@ class MemoryManager:
     def _get_session_document(self, session_id: str):
         """Get session document from MongoDB or in-memory storage"""
         if self.mongodb_available:
-            return self.chatbot_collection.find_one({"_id": ObjectId(session_id)})
+            try:
+                return self.chatbot_collection.find_one({"_id": ObjectId(session_id)})
+            except Exception:
+                # Invalid ObjectId string – treat as not found so caller can create a new session
+                return None
         else:
             return self.in_memory_sessions.get(session_id)
     
