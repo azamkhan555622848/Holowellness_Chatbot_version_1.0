@@ -102,7 +102,15 @@ fi
 # Step 5: Sync PDFs from S3
 echo ""
 echo "📄 Step 5: Syncing PDFs from S3..."
+export RAG_S3_BUCKET="${RAG_S3_BUCKET:-holowellness}"
+export RAG_S3_PREFIX="${RAG_S3_PREFIX:-rag_pdfs/}"
+echo "   S3 Bucket: $RAG_S3_BUCKET"
+echo "   S3 Prefix: $RAG_S3_PREFIX"
 python sync_rag_pdfs.py || echo "   ⚠️  PDF sync failed - continuing anyway"
+
+# Show downloaded PDFs
+echo "📂 Downloaded PDFs:"
+ls -la pdfs/ || echo "   No PDFs directory found"
 
 # Step 6: Test Application
 echo ""
@@ -240,6 +248,18 @@ if [ "\$HEALTH_STATUS" = "200" ]; then
     echo "   ✅ Health check passed"
 else
     echo "   ⚠️  Health check returned status: \$HEALTH_STATUS"
+fi
+
+# Trigger RAG reindexing (build document embeddings after service is running)
+echo ""
+echo "🔍 Step 11: Building RAG Document Index..."
+sleep 3  # Give service time to fully start
+RAG_STATUS=\$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost/api/rag/reindex)
+if [ "\$RAG_STATUS" = "200" ]; then
+    echo "   ✅ RAG document index built successfully"
+else
+    echo "   ⚠️  RAG reindexing failed with status: \$RAG_STATUS"
+    echo "   💡 You can manually trigger reindexing later with: curl -X POST http://localhost/api/rag/reindex"
 fi
 
 # Get final instance IP
