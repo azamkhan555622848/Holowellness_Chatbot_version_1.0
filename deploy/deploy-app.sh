@@ -83,6 +83,22 @@ else
     fi
 fi
 
+# Set critical memory optimization environment variables
+echo "FLASK_ENV=production" >> .env
+echo "ENABLE_ENHANCED_RAG=false" >> .env
+echo "RAG_SYNC_ON_START=false" >> .env
+echo "DISABLE_RERANKER=true" >> .env
+echo "LOG_LEVEL=WARNING" >> .env
+echo "   ✅ Memory optimization environment variables set"
+
+# Copy gunicorn configuration for memory optimization
+if [ -f "$APP_DIR/gunicorn.conf.py" ]; then
+    cp $APP_DIR/gunicorn.conf.py .
+    echo "   ✅ Gunicorn configuration copied (single worker for memory optimization)"
+else
+    echo "   ⚠️  gunicorn.conf.py not found, using defaults"
+fi
+
 # Step 5: Sync PDFs from S3
 echo ""
 echo "📄 Step 5: Syncing PDFs from S3..."
@@ -111,7 +127,7 @@ Type=exec
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=$APP_DIR/backend
-ExecStart=$APP_DIR/backend/venv/bin/gunicorn --bind 127.0.0.1:8000 --workers 2 --timeout 300 app:app
+ExecStart=$APP_DIR/backend/venv/bin/gunicorn --config $APP_DIR/backend/gunicorn.conf.py app:app
 ExecReload=/bin/kill -s HUP \$MAINPID
 KillMode=mixed
 TimeoutStopSec=5
