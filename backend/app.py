@@ -30,15 +30,19 @@ log_level = os.getenv('LOG_LEVEL', 'INFO')
 logging.basicConfig(level=getattr(logging, log_level.upper()))
 logger = logging.getLogger(__name__)
 
-# Import enhanced RAG system with BGE reranking
+# Import enhanced RAG system with BGE reranking (gated by env to reduce memory usage on low-RAM hosts)
+ENABLE_ENHANCED_RAG = os.getenv('ENABLE_ENHANCED_RAG', 'true').lower() == 'true'
 try:
-    from enhanced_rag_qwen import EnhancedRAGSystem
-    USE_ENHANCED_RAG = True
-    logger = logging.getLogger(__name__)
-    logger.info("Enhanced RAG system with BGE reranking is available")
+    if ENABLE_ENHANCED_RAG:
+        from enhanced_rag_qwen import EnhancedRAGSystem
+        USE_ENHANCED_RAG = True
+        logger = logging.getLogger(__name__)
+        logger.info("Enhanced RAG system with BGE reranking is enabled")
+    else:
+        raise ImportError("Enhanced RAG disabled via ENABLE_ENHANCED_RAG=false")
 except ImportError as e:
     logger = logging.getLogger(__name__)
-    logger.warning(f"Enhanced RAG system not available: {e}. Falling back to original RAG system")
+    logger.warning(f"Enhanced RAG disabled/unavailable ({e}). Using original RAG system")
     from rag_qwen import RAGSystem
     USE_ENHANCED_RAG = False
 
