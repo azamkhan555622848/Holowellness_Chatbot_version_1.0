@@ -21,7 +21,12 @@ DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # RAG/S3 configuration
-RAG_SYNC_ON_START = os.getenv('RAG_SYNC_ON_START', 'true').lower() == 'true'
+# MEMORY OPTIMIZATION: Disable sync on start to reduce memory pressure during startup
+# Force disable sync on start in production
+if FLASK_ENV == 'production':
+    RAG_SYNC_ON_START = False
+else:
+    RAG_SYNC_ON_START = os.getenv('RAG_SYNC_ON_START', 'false').lower() == 'true'
 RAG_S3_BUCKET = os.getenv('RAG_S3_BUCKET', 'holowellness')
 RAG_S3_PREFIX = os.getenv('RAG_S3_PREFIX', 'rag_pdfs/')  # default to folder 'rag_pdfs/'
 
@@ -31,7 +36,12 @@ logging.basicConfig(level=getattr(logging, log_level.upper()))
 logger = logging.getLogger(__name__)
 
 # Import enhanced RAG system with BGE reranking (gated by env to reduce memory usage on low-RAM hosts)
-ENABLE_ENHANCED_RAG = os.getenv('ENABLE_ENHANCED_RAG', 'true').lower() == 'true'
+# MEMORY OPTIMIZATION: Default to lightweight RAG for deployment
+# Force disable enhanced RAG in production to prevent memory issues
+if FLASK_ENV == 'production':
+    ENABLE_ENHANCED_RAG = False
+else:
+    ENABLE_ENHANCED_RAG = os.getenv('ENABLE_ENHANCED_RAG', 'false').lower() == 'true'
 try:
     if ENABLE_ENHANCED_RAG:
         from enhanced_rag_qwen import EnhancedRAGSystem
