@@ -115,14 +115,22 @@ rag = None
 rag_error = None
 
 try:
+    # Create PDFs directory if it doesn't exist
+    os.makedirs(PDF_DIR, exist_ok=True)
+    
     if USE_ENHANCED_RAG:
         # Use enhanced RAG with BGE reranking
         rag = EnhancedRAGSystem(pdf_dir=PDF_DIR)
         logger.info("✅ Enhanced RAG system with BGE reranking initialized successfully")
     else:
-        # Fall back to original RAG system
+        # Fall back to original RAG system - allow initialization even with no PDFs
         rag = RAGSystem(PDF_DIR)
         logger.info("⚠️ Using original RAG system (no reranking)")
+        
+    # Log document count
+    doc_count = len(rag.documents) if hasattr(rag, 'documents') and rag.documents else 0
+    logger.info(f"📊 RAG system initialized with {doc_count} documents")
+    
 except Exception as e:
     logger.error(f"❌ RAG system initialization failed: {e}", exc_info=True)
     rag_error = str(e)

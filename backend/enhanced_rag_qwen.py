@@ -122,6 +122,7 @@ class EnhancedRAGSystem(RAGSystem):
             return {
                 "thinking": thinking_process,
                 "content": "I could not find any relevant information in the provided documents to answer your question.",
+                "retrieved_context": "No relevant documents found for this query.",
                 "sources": [],
                 "reranked": self.reranker is not None
             }

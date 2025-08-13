@@ -419,10 +419,14 @@ Now respond to your patient in the same natural, caring way in ENGLISH ONLY. Giv
         total_time = time.time() - start_time
         logging.info(f"Answer generated in {total_time:.2f} seconds")
 
+        # Format retrieved context for display
+        retrieved_context_text = self._format_context(relevant_chunks) if relevant_chunks else "No relevant documents found for this query."
+        
         return {
             "thinking": internal_thinking,
             "content": translated_content,
-            "sources": relevant_chunks
+            "retrieved_context": retrieved_context_text,
+            "sources": relevant_chunks  # Keep for backward compatibility
         }
 
     def _load_or_create_embeddings(self):
