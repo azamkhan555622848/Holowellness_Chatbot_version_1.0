@@ -282,6 +282,9 @@ def chat():
             retrieved_context = response_data.get("retrieved_context", "")
 
             logger.info(f"✅ RAG generation successful, content length: {len(content)}")
+            # If upstream returned an empty string, force fallback to direct OpenRouter to avoid blank first replies
+            if not str(content).strip():
+                raise Exception("Empty content from RAG pipeline")
         except Exception as e:
             logger.error(f"❌ RAG/LLM generation error: {e}", exc_info=True)
             logger.error(f"🔍 Error type: {type(e).__name__}")
@@ -512,7 +515,17 @@ def clear_memory():
 def reindex_rag():
     try:
         sync_pdfs_from_s3()
+
+        # Clear in-memory docs and indexes to avoid duplicates, then rebuild
+        if hasattr(rag, 'documents'):
+            rag.documents = []
+        if hasattr(rag, 'vector_store'):
+            rag.vector_store = None
+        if hasattr(rag, 'bm25_index'):
+            rag.bm25_index = None
+
         rag._ingest_documents()
+        rag._save_embeddings()
 
         # Get all files currently in S3/local after sync
         local_files = {f for f in os.listdir(PDF_DIR) if f.lower().endswith('.pdf')}
@@ -538,7 +551,11 @@ def reindex_rag():
                     }}
                 )
 
-        return jsonify({'status': 'ok', 'message': 'PDFs synced & RAG vectorstore rebuilt.'})
+        return jsonify({
+            'status': 'ok',
+            'message': 'PDFs synced & RAG vectorstore rebuilt.',
+            'documents_indexed': len(rag.documents) if rag and hasattr(rag, 'documents') else 0
+        })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
