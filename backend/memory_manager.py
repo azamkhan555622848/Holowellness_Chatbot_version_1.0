@@ -333,7 +333,34 @@ class MemoryManager:
     def get_session(self, session_id: str) -> Any:
         """Get or create a memory session"""
         if session_id not in self.sessions:
+            # Create a new working memory instance
             self.sessions[session_id] = self._create_memory()
+            # If MongoDB persistence is enabled, hydrate working memory from stored messages
+            if self.mongodb_available:
+                try:
+                    doc = self._get_session_document(session_id)
+                    if doc and isinstance(doc.get("messages"), list):
+                        memory = self.sessions[session_id]
+                        for m in doc["messages"]:
+                            body = m.get("message_body", "")
+                            if not body:
+                                continue
+                            is_user = bool(m.get("direction", True))
+                            # Support HybridMemory and standard LangChain memories
+                            if hasattr(memory, 'add_user_message') and hasattr(memory, 'add_ai_message'):
+                                if is_user:
+                                    memory.add_user_message(body)
+                                else:
+                                    memory.add_ai_message(body)
+                            else:
+                                chat_mem = getattr(memory, 'chat_memory', None)
+                                if chat_mem is not None:
+                                    if is_user:
+                                        chat_mem.add_user_message(body)
+                                    else:
+                                        chat_mem.add_ai_message(body)
+                except Exception as e:
+                    logger.warning(f"Hydration from MongoDB failed for session {session_id}: {e}")
         
         # Update last access time
         self.last_access[session_id] = time.time()
