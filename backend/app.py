@@ -74,10 +74,10 @@ def health_check():
             'timestamp': datetime.utcnow().isoformat()
         }
         
-        # Test MongoDB connection
+        # Test MongoDB connection (lightweight ping)
         try:
             if memory_manager.mongo_client is not None:
-                memory_manager.mongo_client.admin.command('ismaster')
+                memory_manager.mongo_client.admin.command('ping')
                 checks['mongodb_status'] = 'connected'
             else:
                 checks['mongodb_status'] = 'error: MongoDB client not initialized'
@@ -413,7 +413,8 @@ def store_message():
         previous_message = data.get("previous_message", None)
 
         # Always fetch chatbot_id from the session
-        chat_session = memory_manager.chatbot_collection.find_one({"_id": ObjectId(session_id)})
+        chat_session = (memory_manager.chatbot_collection.find_one({"_id": ObjectId(session_id)})
+                        if memory_manager.mongodb_available else memory_manager._get_session_document(session_id))
         chatbot_id = chat_session["chatbot"]
 
         memory_manager._store_message_to_mongo(

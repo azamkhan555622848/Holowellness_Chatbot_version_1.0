@@ -158,8 +158,10 @@ class MemoryManager:
         """
 
         # MongoDB connection with fallback to in-memory storage
-        # Temporarily disabled MongoDB to use in-memory storage for faster deployment
-        mongo_uri = None  # os.getenv("MONGO_URI")
+        mongo_uri = os.getenv("MONGO_URI")
+        mongo_db_name = os.getenv("MONGO_DB_NAME", "db_holo_wellness")
+        chatbot_coll_name = os.getenv("MONGO_CHAT_COLLECTION", "chatbotinteractions")
+        ragfiles_coll_name = os.getenv("MONGO_RAGFILES_COLLECTION", "ragfiles")
         self.mongodb_available = False
         self.mongo_client = None
         self.mongo_db = None
@@ -185,29 +187,39 @@ class MemoryManager:
             else:
                 self.llm = TokenCountingLLM()
         
-        # Temporarily disable MongoDB connection - using in-memory storage
-        logger.info("🧠 MongoDB temporarily disabled. Using in-memory storage for session management.")
-        
-        # if mongo_uri:
-        #     try:
-        #         self.mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-        #         # Test the connection only if client was created successfully
-        #         if self.mongo_client is not None:
-        #             self.mongo_client.admin.command('ping')
-        #             self.mongo_db = self.mongo_client["db_holo_wellness"]
-        #             self.chatbot_collection = self.mongo_db["chatbotinteractions"]
-        #             self.ragfiles_collection = self.mongo_db["ragfiles"]
-        #             self.mongodb_available = True
-        #             logger.info("✅ MongoDB connected successfully")
-        #         else:
-        #             raise Exception("MongoClient initialization returned None")
-        #     except Exception as e:
-        #         logger.warning(f"⚠️ MongoDB connection failed: {e}. Using in-memory storage as fallback.")
-        #         self.mongodb_available = False
-        #         # Ensure client is None on failure
-        #         self.mongo_client = None
-        # else:
-        #     logger.info("🧠 No MONGO_URI provided. Using in-memory storage for session management.")
+        # Initialize Mongo if URI provided; else use in-memory fallback
+        if mongo_uri:
+            try:
+                self.mongo_client = MongoClient(
+                    mongo_uri,
+                    serverSelectionTimeoutMS=5000,
+                    connectTimeoutMS=5000,
+                    maxPoolSize=int(os.getenv("MONGO_MAX_POOL_SIZE", "20")),
+                    retryWrites=True
+                )
+                # Validate the connection
+                self.mongo_client.admin.command('ping')
+                self.mongo_db = self.mongo_client[mongo_db_name]
+                self.chatbot_collection = self.mongo_db[chatbot_coll_name]
+                self.ragfiles_collection = self.mongo_db[ragfiles_coll_name]
+                # Ensure indexes for performance and data access patterns
+                self._ensure_indexes()
+                self.mongodb_available = True
+                logger.info(
+                    "✅ MongoDB connected: db=%s, collections=[%s,%s]",
+                    mongo_db_name,
+                    chatbot_coll_name,
+                    ragfiles_coll_name,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ MongoDB connection failed: {e}. Falling back to in-memory storage.",
+                    exc_info=True,
+                )
+                self.mongodb_available = False
+                self.mongo_client = None
+        else:
+            logger.info("🧠 No MONGO_URI provided. Using in-memory storage for session management.")
 
         self.memory_type = memory_type
         self.max_token_limit = max_token_limit
@@ -222,6 +234,19 @@ class MemoryManager:
         # Start cleanup thread
         self.cleanup_thread = threading.Thread(target=self._cleanup_old_sessions, daemon=True)
         self.cleanup_thread.start()
+
+    def _ensure_indexes(self) -> None:
+        """Create indexes used by the app. Safe to call repeatedly."""
+        try:
+            if self.chatbot_collection is not None:
+                # Query latest sessions efficiently
+                self.chatbot_collection.create_index([("updated_at", -1)])
+                # Make message_id lookups faster for rating updates
+                self.chatbot_collection.create_index("messages.message_id")
+            if self.ragfiles_collection is not None:
+                self.ragfiles_collection.create_index("file_name", unique=False)
+        except Exception as e:
+            logger.warning(f"Index creation failed: {e}")
     
     def _get_session_document(self, session_id: str):
         """Get session document from MongoDB or in-memory storage"""
