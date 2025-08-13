@@ -23,7 +23,7 @@ SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 # RAG/S3 configuration
 RAG_SYNC_ON_START = os.getenv('RAG_SYNC_ON_START', 'true').lower() == 'true'
 RAG_S3_BUCKET = os.getenv('RAG_S3_BUCKET', 'holowellness')
-RAG_S3_PREFIX = os.getenv('RAG_S3_PREFIX', '')  # e.g. 'rag_pdfs/' or '' for root
+RAG_S3_PREFIX = os.getenv('RAG_S3_PREFIX', 'rag_pdfs/')  # default to folder 'rag_pdfs/'
 
 # Configure logging
 log_level = os.getenv('LOG_LEVEL', 'INFO')
@@ -95,6 +95,7 @@ def health_check():
 # Initialize the RAG system (Enhanced or Original) with error handling
 PDF_DIR = os.path.join(os.path.dirname(__file__), "pdfs")
 logger.info(f"Initializing RAG system with documents from: {PDF_DIR}")
+logger.info(f"RAG S3 source: bucket='{RAG_S3_BUCKET}', prefix='{RAG_S3_PREFIX}'")
 
 rag = None
 rag_error = None
@@ -117,23 +118,23 @@ except Exception as e:
 # Optionally sync PDFs from S3 and rebuild indices at startup
 try:
     if rag is not None and RAG_SYNC_ON_START:
-        needs_sync = True
-        if os.path.isdir(PDF_DIR):
-            pdfs_present = any(name.lower().endswith('.pdf') for name in os.listdir(PDF_DIR))
-            needs_sync = not pdfs_present
-
-        if needs_sync:
-            logger.info(
-                f"📥 RAG_SYNC_ON_START enabled. Syncing PDFs from S3 bucket '{RAG_S3_BUCKET}' prefix '{RAG_S3_PREFIX}'..."
-            )
-            # sync from S3 and rebuild indices
-            sync_pdfs_from_s3()
-            try:
-                rag._ingest_documents()
-                rag._save_embeddings()
-                logger.info("✅ Initial PDF sync & embedding cache built")
-            except Exception as reindex_err:
-                logger.error(f"Failed to build embeddings after sync: {reindex_err}")
+        logger.info(
+            f"📥 RAG_SYNC_ON_START enabled. Syncing PDFs from S3 bucket '{RAG_S3_BUCKET}' prefix '{RAG_S3_PREFIX}'..."
+        )
+        # Always sync on start to ensure only expected PDFs are present
+        sync_pdfs_from_s3()
+        try:
+            if hasattr(rag, 'documents'):
+                rag.documents = []
+            if hasattr(rag, 'vector_store'):
+                rag.vector_store = None
+            if hasattr(rag, 'bm25_index'):
+                rag.bm25_index = None
+            rag._ingest_documents()
+            rag._save_embeddings()
+            logger.info("✅ Startup PDF sync & embedding cache built")
+        except Exception as reindex_err:
+            logger.error(f"Failed to build embeddings after sync: {reindex_err}")
 except Exception as sync_err:
     logger.error(f"Startup sync error: {sync_err}")
 
@@ -183,6 +184,10 @@ def api_info():
         'message': f'HoloWellness Chatbot API is running with DeepSeek-R1-Distill-Qwen-14B{enhanced_info}',
         'rag_status': rag_status,
         'rag_system': rag_info,
+        'rag_s3': {
+            'bucket': RAG_S3_BUCKET,
+            'prefix': RAG_S3_PREFIX
+        },
         'endpoints': {
             '/api/chat': 'POST - Send a query to get a response from the enhanced chatbot',
             '/api/health': 'GET - Check if the API is running',
@@ -558,6 +563,32 @@ def reindex_rag():
         })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/rag/status', methods=['GET'])
+def rag_status():
+    try:
+        local_dir = PDF_DIR
+        files = []
+        if os.path.isdir(local_dir):
+            files = [f for f in os.listdir(local_dir) if f.lower().endswith('.pdf')]
+        cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
+        cache_files = {}
+        for name in ('vector_index.faiss', 'documents.pkl', 'bm25_index.pkl'):
+            path = os.path.join(cache_dir, name)
+            cache_files[name] = os.path.getsize(path) if os.path.exists(path) else None
+
+        return jsonify({
+            'bucket': RAG_S3_BUCKET,
+            'prefix': RAG_S3_PREFIX,
+            'local_pdfs_count': len(files),
+            'local_pdfs': files,
+            'documents_indexed': len(rag.documents) if rag and hasattr(rag, 'documents') else 0,
+            'cache_files': cache_files
+        })
+    except Exception as e:
+        logger.error(f"/api/rag/status error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 
