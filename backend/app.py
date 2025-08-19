@@ -11,6 +11,7 @@ from memory_manager import memory_manager
 from bson.json_util import dumps
 from bson import ObjectId, errors
 from sync_rag_pdfs import sync_pdfs_from_s3
+import re
 
 # Load environment variables
 load_dotenv()
@@ -174,6 +175,41 @@ except Exception:
     logger.exception("Failed to apply DISABLE_RERANKER flag")
 
 
+def _detect_language(text: str) -> str:
+    """Very small heuristic to detect if user is writing in Chinese vs English."""
+    if re.search(r"[\u4e00-\u9fff]", text):
+        return "zh"
+    return "en"
+
+
+def _classify_intent(query: str, history: list) -> str:
+    """Rule-based intent tags to steer replies on-topic without heavy models."""
+    q = (query or "").lower()
+    joined = (" ".join([m.get("content", "") for m in history]) if history else "").lower()
+    text = f"{joined} {q}"
+    knee_terms = [
+        "knee", "kneecap", "patella", "patellofemoral", "pfps",
+        "膝", "膝蓋", "膝盖", "髕骨", "髌骨", "前膝"
+    ]
+    if any(t in text for t in knee_terms):
+        return "knee_pain"
+    back_terms = ["back pain", "腰痛", "下背", "背痛"]
+    if any(t in text for t in back_terms):
+        return "back_pain"
+    shoulder_terms = ["shoulder", "肩", "肩膀"]
+    if any(t in text for t in shoulder_terms):
+        return "shoulder_pain"
+    return "general"
+
+
+def _is_followup(history: list) -> bool:
+    """Detect if the previous assistant message contained a question and the user is replying."""
+    if not history:
+        return False
+    last_msgs = history[-2:]
+    last_assistant = next((m for m in reversed(last_msgs) if m.get("role") == "assistant"), None)
+    return bool(last_assistant and "?" in last_assistant.get("content", ""))
+
 @app.route('/', methods=['GET'])
 def index():
     """Serve the static HTML file"""
@@ -298,7 +334,19 @@ def chat():
             # Enforce a soft timeout around RAG end-to-end generation
             rag_timeout_s = int(os.getenv('RAG_TIMEOUT_SECONDS', '45'))
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(rag.generate_answer, query, conversation_history)
+                # Add lightweight routing hints to the top of history to steer the model
+                user_lang = _detect_language(query)
+                intent_tag = _classify_intent(query, conversation_history)
+                expecting_followup = _is_followup(conversation_history)
+                routing_hint = (
+                    f"ROUTING_HINTS:\nintent={intent_tag}\n"
+                    f"user_language={'zh-TW' if user_lang=='zh' else 'en'}\n"
+                    f"followup_mode={'true' if expecting_followup else 'false'}\n"
+                    "Focus strictly on the patient's current complaint and avoid generic wellness advice unless explicitly asked. "
+                    "If followup_mode=true, interpret the user's message as an answer to your prior question and move to the next most relevant diagnostic step."
+                )
+                augmented_history = [{"role": "system", "content": routing_hint}] + conversation_history
+                future = executor.submit(rag.generate_answer, query, augmented_history)
                 try:
                     response_data = future.result(timeout=rag_timeout_s)
                 except concurrent.futures.TimeoutError:
@@ -332,10 +380,11 @@ def chat():
                     {
                         "role": "system",
                         "content": (
-                            "You are Dr. HoloWellness, an experienced human wellness doctor with expertise in sports medicine, general health, and preventive care. You are speaking directly to your patient in a professional consultation. "
-                            
-                            "IMPORTANT: You must respond ONLY in English. Do not use any other language. "
-                            
+                            "You are Dr. HoloWellness, an experienced human wellness doctor (sports medicine, general health, preventive care). You are speaking directly to your patient in a professional consultation. "
+                            f"Respond in {'Traditional Chinese' if _detect_language(query)=='zh' else 'English'} only. "
+                            f"Primary intent: {_classify_intent(query, conversation_history)}. Stay strictly on-topic for this intent. "
+                            "If the user seems to answer your previous question, acknowledge it briefly and continue with the next targeted step instead of repeating questions. "
+
                             "RESPONSE STRUCTURE - Follow this format STRICTLY: "
                             "1. Brief empathetic acknowledgment (1 sentence) "
                             "2. Professional assessment based on symptoms (1-2 sentences) "
@@ -351,8 +400,8 @@ def chat():
                     }
                 ]
                 
-                # Add conversation history (limited to last 5 messages)
-                for msg in conversation_history[-5:]:
+                # Add conversation history (limited to last 6 messages to capture prior Q/A)
+                for msg in conversation_history[-6:]:
                     messages.append(msg)
                 
                 # Add current user query
