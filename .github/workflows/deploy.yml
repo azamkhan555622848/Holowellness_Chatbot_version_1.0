@@ -80,15 +80,7 @@ jobs:
         cd deployment
         tar -czf ../holowellness-deployment.tar.gz .
         
-    - name: Upload to S3
-      run: |
-        # Create S3 bucket if it doesn't exist
-        aws s3 mb s3://holowellness-deployments-${{ github.run_number }} --region ${{ secrets.AWS_REGION }} || true
-        
-        # Upload deployment package
-        aws s3 cp holowellness-deployment.tar.gz s3://holowellness-deployments-${{ github.run_number }}/
-        
-        echo "DEPLOYMENT_BUCKET=holowellness-deployments-${{ github.run_number }}" >> $GITHUB_ENV
+    # Removed S3 upload to avoid /tmp space issues on EC2 and simplify deploy
     
     - name: Resolve EC2 instance (reuse existing)
       id: resolve-ec2
@@ -135,19 +127,15 @@ jobs:
         #!/bin/bash
         set -e
         
-        # Install AWS CLI if not present
-        if ! command -v aws &> /dev/null; then
-            echo "📦 Installing AWS CLI..."
-            sudo apt-get update
-            sudo apt-get install -y awscli
+        # Deployment package is uploaded via SCP to /home/ubuntu
+        PKG=/home/ubuntu/holowellness-deployment.tar.gz
+        if [ ! -f "$PKG" ]; then
+            echo "❌ Deployment package not found at $PKG"; exit 1
         fi
-        
-        # Download and extract deployment package
-        aws s3 cp s3://${{ env.DEPLOYMENT_BUCKET }}/holowellness-deployment.tar.gz /tmp/
-        
+
         # Extract to application directory
         sudo mkdir -p /opt/holowellness
-        sudo tar -xzf /tmp/holowellness-deployment.tar.gz -C /opt/holowellness
+        sudo tar -xzf "$PKG" -C /opt/holowellness
         sudo chown -R ubuntu:ubuntu /opt/holowellness
         
         # Run application deployment (skip repository cloning since we already have the files)
@@ -379,7 +367,8 @@ jobs:
         echo "   ✅ Application started successfully"
         EOF
         
-        # Copy and execute deployment script on remote instance using EIC key
+        # Copy package and deployment script to remote host using EIC key
+        scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no holowellness-deployment.tar.gz ubuntu@${PUBLIC_IP}:/home/ubuntu/holowellness-deployment.tar.gz
         scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no remote-deploy.sh ubuntu@${PUBLIC_IP}:/tmp/
         ssh -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP} "chmod +x /tmp/remote-deploy.sh && /tmp/remote-deploy.sh"
     
