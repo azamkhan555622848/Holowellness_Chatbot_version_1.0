@@ -367,6 +367,25 @@ jobs:
         echo "   ✅ Application started successfully"
         EOF
         
+        # Pre-clean remote disk to ensure enough free space
+        ssh -i ~/.ssh/holowellness -o StrictHostKeyChecking=no ubuntu@${PUBLIC_IP} '
+          set -euo pipefail
+          echo "🔧 Pre-clean on remote to free disk..."
+          df -h || true
+          sudo rm -f /home/ubuntu/holowellness-deployment.tar.gz || true
+          # Remove previous deployment to avoid duplication and free space
+          sudo rm -rf /opt/holowellness || true
+          sudo mkdir -p /opt/holowellness
+          sudo chown ubuntu:ubuntu /opt/holowellness
+          # Clean caches
+          sudo apt-get clean || true
+          sudo rm -rf /var/cache/apt/archives/* || true
+          rm -rf ~/.cache/pip || true
+          sudo rm -rf /tmp/* || true
+          echo "After cleanup:"
+          df -h || true
+        '
+
         # Copy package and deployment script to remote host using EIC key
         scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no holowellness-deployment.tar.gz ubuntu@${PUBLIC_IP}:/home/ubuntu/holowellness-deployment.tar.gz
         scp -i ~/.ssh/holowellness -o StrictHostKeyChecking=no remote-deploy.sh ubuntu@${PUBLIC_IP}:/tmp/
