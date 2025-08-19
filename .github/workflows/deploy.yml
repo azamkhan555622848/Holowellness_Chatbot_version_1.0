@@ -137,6 +137,8 @@ jobs:
         sudo mkdir -p /opt/holowellness
         sudo tar -xzf "$PKG" -C /opt/holowellness
         sudo chown -R ubuntu:ubuntu /opt/holowellness
+        # Remove package to free disk space
+        rm -f "$PKG" || true
         
         # Run application deployment (skip repository cloning since we already have the files)
         cd /opt/holowellness
@@ -154,14 +156,27 @@ jobs:
         # Backend files are directly in /opt/holowellness (not in a backend subdirectory)
         echo "✅ Backend files found directly in /opt/holowellness"
         
-        # Create virtual environment in the main directory
+        # Create virtual environment in the main directory (reset any old venv)
+        rm -rf venv || true
         python3 -m venv venv
         source venv/bin/activate
         
         # Install production dependencies with CPU-only PyTorch
+        # Minimize disk usage during installation
+        export PIP_NO_CACHE_DIR=1
+        pip cache purge || true
+        export TMPDIR=/opt/holowellness/tmp
+        mkdir -p "$TMPDIR"
+        # Clean apt and journal logs to reclaim space
+        sudo journalctl --vacuum-size=50M || true
+        sudo apt-get clean || true
+        sudo rm -rf /var/cache/apt/archives/* || true
         pip install --upgrade pip
-        pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-        pip install -r requirements-prod.txt
+        pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+        pip install --no-cache-dir -r requirements-prod.txt
+        # Drop caches created during install
+        rm -rf ~/.cache/pip ~/.cache/huggingface || true
+        sudo rm -rf /root/.cache/pip /root/.cache/huggingface || true
         
         echo "   ✅ Python environment ready"
         
@@ -248,14 +263,15 @@ jobs:
         # Create a gunicorn config for better logging
         cat > gunicorn.conf.py << 'GUNICORN_CONFIG'
         bind = "0.0.0.0:5000"
-        workers = 3
+        workers = 1
+        threads = 1
         # Increase timeout to accommodate slower CPU inference
         timeout = 300
         graceful_timeout = 300
         keepalive = 5
         max_requests = 1000
         max_requests_jitter = 100
-        preload_app = True
+        preload_app = False
         daemon = False
         user = "ubuntu"
         group = "ubuntu"
