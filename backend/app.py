@@ -11,6 +11,7 @@ from memory_manager import memory_manager
 from bson.json_util import dumps
 from bson import ObjectId, errors
 from sync_rag_pdfs import sync_pdfs_from_s3
+from s3_cache import try_download_caches, try_upload_caches
 import re
 
 # Load environment variables
@@ -153,8 +154,11 @@ try:
                 rag.vector_store = None
             if hasattr(rag, 'bm25_index'):
                 rag.bm25_index = None
-            rag._ingest_documents()
-            rag._save_embeddings()
+            # Try S3 caches first
+            if not try_download_caches(rag):
+                rag._ingest_documents()
+                rag._save_embeddings()
+                try_upload_caches(rag)
             logger.info("✅ Startup PDF sync & embedding cache built")
         except Exception as reindex_err:
             logger.error(f"Failed to build embeddings after sync: {reindex_err}")
@@ -658,8 +662,11 @@ def reindex_rag():
         if hasattr(rag, 'bm25_index'):
             rag.bm25_index = None
 
-        rag._ingest_documents()
-        rag._save_embeddings()
+        # Try downloading caches first; otherwise rebuild and upload
+        if not try_download_caches(rag):
+            rag._ingest_documents()
+            rag._save_embeddings()
+            try_upload_caches(rag)
 
         # Get all files currently in S3/local after sync
         local_files = {f for f in os.listdir(PDF_DIR) if f.lower().endswith('.pdf')}
@@ -706,6 +713,11 @@ def rag_status():
         for name in ('vector_index.faiss', 'documents.pkl', 'documents.pkl.gz', 'bm25_index.pkl'):
             path = os.path.join(cache_dir, name)
             cache_files[name] = os.path.getsize(path) if os.path.exists(path) else None
+        # S3 cache info
+        s3_info = {
+            'bucket': os.getenv('S3_CACHE_BUCKET') or RAG_S3_BUCKET,
+            'prefix': os.getenv('S3_CACHE_PREFIX', 'cache/current/')
+        }
 
         return jsonify({
             'bucket': RAG_S3_BUCKET,
@@ -713,7 +725,8 @@ def rag_status():
             'local_pdfs_count': len(files),
             'local_pdfs': files,
             'documents_indexed': len(rag.documents) if rag and hasattr(rag, 'documents') else 0,
-            'cache_files': cache_files
+            'cache_files': cache_files,
+            's3_cache': s3_info
         })
     except Exception as e:
         logger.error(f"/api/rag/status error: {e}")
