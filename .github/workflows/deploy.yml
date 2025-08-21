@@ -205,6 +205,22 @@ jobs:
         RAG_TIMEOUT_SECONDS_VAL="${{ vars.RAG_TIMEOUT_SECONDS }}"
         [ -z "$RAG_TIMEOUT_SECONDS_VAL" ] && RAG_TIMEOUT_SECONDS_VAL="45"
 
+        # RAG token budgets (prefer repo vars; fallback to secrets; then defaults)
+        RAG_GENERATION_MAX_TOKENS_VAL="${{ vars.RAG_GENERATION_MAX_TOKENS }}"
+        [ -z "$RAG_GENERATION_MAX_TOKENS_VAL" ] && RAG_GENERATION_MAX_TOKENS_VAL="${{ secrets.RAG_GENERATION_MAX_TOKENS }}"
+        [ -z "$RAG_GENERATION_MAX_TOKENS_VAL" ] && RAG_GENERATION_MAX_TOKENS_VAL="600"
+        RAG_TRANSLATION_MAX_TOKENS_VAL="${{ vars.RAG_TRANSLATION_MAX_TOKENS }}"
+        [ -z "$RAG_TRANSLATION_MAX_TOKENS_VAL" ] && RAG_TRANSLATION_MAX_TOKENS_VAL="${{ secrets.RAG_TRANSLATION_MAX_TOKENS }}"
+        [ -z "$RAG_TRANSLATION_MAX_TOKENS_VAL" ] && RAG_TRANSLATION_MAX_TOKENS_VAL="1200"
+
+        # RAG S3 source (optional overrides)
+        RAG_S3_BUCKET_VAL="${{ vars.RAG_S3_BUCKET }}"
+        [ -z "$RAG_S3_BUCKET_VAL" ] && RAG_S3_BUCKET_VAL="${{ secrets.RAG_S3_BUCKET }}"
+        [ -z "$RAG_S3_BUCKET_VAL" ] && RAG_S3_BUCKET_VAL="holowellness"
+        RAG_S3_PREFIX_VAL="${{ vars.RAG_S3_PREFIX }}"
+        [ -z "$RAG_S3_PREFIX_VAL" ] && RAG_S3_PREFIX_VAL="${{ secrets.RAG_S3_PREFIX }}"
+        [ -z "$RAG_S3_PREFIX_VAL" ] && RAG_S3_PREFIX_VAL="rag_pdfs/"
+
         sudo tee /opt/holowellness/.env >/dev/null <<ENVEOF
         FLASK_ENV=production
         DEBUG=False
@@ -220,6 +236,10 @@ jobs:
         OPENROUTER_TIMEOUT="$OPENROUTER_TIMEOUT_VAL"
         DISABLE_RERANKER="$DISABLE_RERANKER_VAL"
         RAG_TIMEOUT_SECONDS="$RAG_TIMEOUT_SECONDS_VAL"
+        RAG_GENERATION_MAX_TOKENS="$RAG_GENERATION_MAX_TOKENS_VAL"
+        RAG_TRANSLATION_MAX_TOKENS="$RAG_TRANSLATION_MAX_TOKENS_VAL"
+        RAG_S3_BUCKET="$RAG_S3_BUCKET_VAL"
+        RAG_S3_PREFIX="$RAG_S3_PREFIX_VAL"
         APP_PUBLIC_URL="http://${PUBIP}"
         APP_TITLE="HoloWellness Chatbot"
 
@@ -424,6 +444,41 @@ jobs:
           else
             echo "⏳ Waiting for application to start... (attempt $i/10)"
             sleep 30
+          fi
+        done
+
+    - name: Post-deploy RAG Reindex
+      if: steps.resolve-ec2.outputs.instance-ip != ''
+      run: |
+        set -e
+        sudo apt-get update && sudo apt-get install -y jq >/dev/null 2>&1 || true
+        REINDEX_URL="http://${PUBLIC_IP}/api/rag/reindex"
+        STATUS_URL="http://${PUBLIC_IP}/api/rag/status"
+        echo "🔁 Triggering RAG reindex: $REINDEX_URL"
+        # Trigger reindex (best-effort; don't fail the workflow if it times out)
+        curl -s -X POST "$REINDEX_URL" || true
+        echo "⏳ Waiting for reindex to complete..."
+        # Poll status a few times
+        for i in {1..10}; do
+          sleep 6
+          RESP=$(curl -s "$STATUS_URL" || true)
+          echo "RAG status (attempt $i): $RESP"
+          if command -v jq >/dev/null 2>&1; then
+            DOCS=$(echo "$RESP" | jq -r '.documents_indexed // 0' 2>/dev/null || echo 0)
+          else
+            DOCS=$(python3 - << 'PY'
+import sys, json
+try:
+    data=json.load(sys.stdin)
+    print(data.get('documents_indexed') or 0)
+except Exception:
+    print(0)
+PY
+            <<< "$RESP")
+          fi
+          if [ "$DOCS" != "null" ] && [ "$DOCS" -gt 0 ]; then
+            echo "✅ RAG indexed $DOCS documents"
+            break
           fi
         done
     

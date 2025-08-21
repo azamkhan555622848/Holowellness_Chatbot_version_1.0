@@ -279,7 +279,8 @@ class RAGSystem:
                     options={
                         "temperature": 0.1,  # Lower temperature for consistent translation
                         "top_p": 0.7,
-                        "num_predict": 400  # Limit translation length
+                        # Allow configuring translation token budget via env; default higher to avoid truncation
+                        "num_predict": int(os.getenv("RAG_TRANSLATION_MAX_TOKENS", "1200"))
                     }
                 )
             
@@ -385,7 +386,8 @@ NOW RESPOND: Use the same professional, natural approach with the exact structur
                     options={
                         "temperature": 0.4,  # Slightly more creative for natural responses
                         "top_p": 0.8,        # Allow more response variety
-                        "num_predict": 300,  # Shorter to prevent long thinking
+                        # Allow configuring generation token budget via env to reduce truncation
+                        "num_predict": int(os.getenv("RAG_GENERATION_MAX_TOKENS", "600")),
                         "stop": ["<think>", "Patient:", "Dr. HoloWellness:", "\n\n\n"]
                     }
                 )
