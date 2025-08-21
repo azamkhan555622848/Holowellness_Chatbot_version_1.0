@@ -260,11 +260,24 @@ class RAGSystem:
         if not self.documents:
             print("Warning: No documents available for search")
             return []
+        
+        # Ensure BM25 index exists; build on demand if missing
+        if self.bm25_index is None:
+            try:
+                tokenized_corpus = [doc['text'].split(" ") for doc in self.documents]
+                self.bm25_index = BM25Okapi(tokenized_corpus)
+            except Exception as e:
+                print(f"Failed to build BM25 on demand: {e}")
             
-        # Vector search (FAISS)
-        query_embedding = self.embedder.encode([query])
-        D, I = self.vector_store.search(np.array(query_embedding, dtype=np.float32), k=self.top_k)
-        vector_results_indices = I[0]
+        vector_results_indices = []
+        # Vector search (FAISS) only if vector_store and embedder are available
+        if self.vector_store is not None and self.embedder is not None:
+            try:
+                query_embedding = self.embedder.encode([query])
+                D, I = self.vector_store.search(np.array(query_embedding, dtype=np.float32), k=self.top_k)
+                vector_results_indices = I[0]
+            except Exception as e:
+                print(f"Vector search failed or unavailable, falling back to BM25 only: {e}")
 
         # Keyword search (BM25)
         tokenized_query = query.split(" ")
@@ -510,18 +523,23 @@ NOW RESPOND: Use the same professional, natural approach with the exact structur
                 pickle.dump(self.bm25_index, f)
             return
         
-        embeddings = self.embedder.encode([doc['text'] for doc in self.documents])
-        embeddings_np = np.array(embeddings, dtype=np.float32)
-        
-        # Ensure we have valid embeddings
-        if embeddings_np.size == 0 or len(embeddings_np.shape) != 2:
-            print("Warning: Invalid embeddings created. Using default dimensions.")
-            self.vector_store = faiss.IndexFlatL2(self.embedding_dim)
-        else:
-            self.vector_store = faiss.IndexFlatL2(embeddings_np.shape[1])
-            self.vector_store.add(embeddings_np)
+        try:
+            embeddings = self.embedder.encode([doc['text'] for doc in self.documents])
+            embeddings_np = np.array(embeddings, dtype=np.float32)
             
-        faiss.write_index(self.vector_store, self.vector_cache)
+            # Ensure we have valid embeddings
+            if embeddings_np.size == 0 or len(embeddings_np.shape) != 2:
+                print("Warning: Invalid embeddings created. Using default dimensions.")
+                self.vector_store = faiss.IndexFlatL2(self.embedding_dim)
+            else:
+                self.vector_store = faiss.IndexFlatL2(embeddings_np.shape[1])
+                self.vector_store.add(embeddings_np)
+            
+            faiss.write_index(self.vector_store, self.vector_cache)
+        except Exception as e:
+            # If saving vector index fails (e.g., ENOSPC), degrade to BM25-only retrieval
+            print(f"Failed to build/save vector index, falling back to BM25-only: {e}")
+            self.vector_store = None
 
         tokenized_corpus = [doc['text'].split(" ") for doc in self.documents]
         self.bm25_index = BM25Okapi(tokenized_corpus)
