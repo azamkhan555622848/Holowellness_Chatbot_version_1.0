@@ -466,15 +466,7 @@ jobs:
           if command -v jq >/dev/null 2>&1; then
             DOCS=$(echo "$RESP" | jq -r '.documents_indexed // 0' 2>/dev/null || echo 0)
           else
-            DOCS=$(python3 - << 'PY'
-import sys, json
-try:
-    data=json.load(sys.stdin)
-    print(data.get('documents_indexed') or 0)
-except Exception:
-    print(0)
-PY
-            <<< "$RESP")
+            DOCS=0
           fi
           if [ "$DOCS" != "null" ] && [ "$DOCS" -gt 0 ]; then
             echo "✅ RAG indexed $DOCS documents"
