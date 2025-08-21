@@ -85,9 +85,9 @@ fi
 
 # Set critical memory optimization environment variables
 echo "FLASK_ENV=production" >> .env
-echo "ENABLE_ENHANCED_RAG=false" >> .env
+echo "ENABLE_ENHANCED_RAG=true" >> .env
 echo "RAG_SYNC_ON_START=false" >> .env
-echo "DISABLE_RERANKER=true" >> .env
+echo "DISABLE_RERANKER=false" >> .env
 echo "LOG_LEVEL=WARNING" >> .env
 echo "   ✅ Memory optimization environment variables set"
 

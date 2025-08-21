@@ -26,7 +26,7 @@ class EnhancedRAGSystem(RAGSystem):
         
         self.first_stage_k = 100  # More candidates for reranking
         self.final_k = 10         # More final results
-        self.score_threshold = -1.0  # Very permissive threshold
+        self.score_threshold = 0.3  # More balanced threshold for better retrieval
         
         self._load_or_create_embeddings()
         self._init_reranker()
