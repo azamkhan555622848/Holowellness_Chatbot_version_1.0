@@ -703,7 +703,7 @@ def rag_status():
             files = [f for f in os.listdir(local_dir) if f.lower().endswith('.pdf')]
         cache_dir = os.path.join(os.path.dirname(__file__), 'cache')
         cache_files = {}
-        for name in ('vector_index.faiss', 'documents.pkl', 'bm25_index.pkl'):
+        for name in ('vector_index.faiss', 'documents.pkl', 'documents.pkl.gz', 'bm25_index.pkl'):
             path = os.path.join(cache_dir, name)
             cache_files[name] = os.path.getsize(path) if os.path.exists(path) else None
 

@@ -17,6 +17,7 @@ from PIL import Image
 import io
 import pickle
 from pathlib import Path
+import gzip
 from typing import List, Dict, Tuple, Optional, Any
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
@@ -69,9 +70,15 @@ class RAGSystem:
         self.chunk_size = 512
         self.chunk_overlap = 50
         self.top_k = top_k
+        # Cap the total number of chunks to limit disk/RAM footprint
+        try:
+            self.max_chunks = int(os.getenv("RAG_MAX_CHUNKS", "3000"))
+        except Exception:
+            self.max_chunks = 3000
 
         self.vector_cache = os.path.join(self.cache_dir, "vector_index.faiss")
-        self.docs_cache = os.path.join(self.cache_dir, "documents.pkl")
+        # Use gzip to reduce disk usage for large corpora
+        self.docs_cache = os.path.join(self.cache_dir, "documents.pkl.gz")
         self.bm25_cache = os.path.join(self.cache_dir, "bm25_index.pkl")
         
         self.embedder = None
@@ -202,14 +209,22 @@ class RAGSystem:
         
         if text:
             chunks = self._chunk_text(text)
+            added = 0
             for chunk in chunks:
+                if len(self.documents) >= self.max_chunks:
+                    print(f"Reached max chunks limit ({self.max_chunks}). Stopping ingestion.")
+                    break
                 self.documents.append({'text': chunk, 'source': source_info, 'file': os.path.basename(file_path)})
-            print(f"Extracted {len(chunks)} chunks from {os.path.basename(file_path)}")
+                added += 1
+            print(f"Extracted {len(chunks)} chunks from {os.path.basename(file_path)} (added {added}, total {len(self.documents)})")
 
     def _ingest_documents(self):
         print("Processing documents...")
         for root, _, files in os.walk(self.pdf_directory):
             for file in files:
+                if len(self.documents) >= self.max_chunks:
+                    print(f"Global max chunks limit reached ({self.max_chunks}). Halting ingestion.")
+                    return
                 self._process_file(os.path.join(root, file), os.path.basename(root))
 
     def _format_context(self, chunks: List[Dict[str, Any]]) -> str:
@@ -453,10 +468,21 @@ NOW RESPOND: Use the same professional, natural approach with the exact structur
         self.embedder = SentenceTransformer(self.embeddings_model_name)
         self.embedding_dim = self.embedder.get_sentence_embedding_dimension()
 
-        if os.path.exists(self.docs_cache) and os.path.exists(self.bm25_cache) and os.path.exists(self.vector_cache):
+        docs_cache_exists = os.path.exists(self.docs_cache) or os.path.exists(self.docs_cache.replace('.gz', ''))
+        if docs_cache_exists and os.path.exists(self.bm25_cache) and os.path.exists(self.vector_cache):
             print("Loading embeddings and indices from cache...")
-            with open(self.docs_cache, 'rb') as f:
-                self.documents = pickle.load(f)
+            # Try gzipped documents first, fallback to plain pickle for backward compatibility
+            docs_path = self.docs_cache if os.path.exists(self.docs_cache) else self.docs_cache.replace('.gz', '')
+            try:
+                if docs_path.endswith('.gz'):
+                    with gzip.open(docs_path, 'rb') as f:
+                        self.documents = pickle.load(f)
+                else:
+                    with open(docs_path, 'rb') as f:
+                        self.documents = pickle.load(f)
+            except Exception as e:
+                print(f"Failed to load documents cache {docs_path}: {e}. Proceeding with empty docs.")
+                self.documents = []
             with open(self.bm25_cache, 'rb') as f:
                 self.bm25_index = pickle.load(f)
             self.vector_store = faiss.read_index(self.vector_cache)
@@ -502,7 +528,8 @@ NOW RESPOND: Use the same professional, natural approach with the exact structur
         with open(self.bm25_cache, 'wb') as f:
             pickle.dump(self.bm25_index, f)
 
-        with open(self.docs_cache, 'wb') as f:
+        # Save documents compressed to reduce disk footprint
+        with gzip.open(self.docs_cache, 'wb') as f:
             pickle.dump(self.documents, f)
             
         print(f"Saved {len(self.documents)} documents and their indices to cache.")

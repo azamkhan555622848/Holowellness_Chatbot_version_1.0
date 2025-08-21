@@ -221,6 +221,11 @@ jobs:
         [ -z "$RAG_S3_PREFIX_VAL" ] && RAG_S3_PREFIX_VAL="${{ secrets.RAG_S3_PREFIX }}"
         [ -z "$RAG_S3_PREFIX_VAL" ] && RAG_S3_PREFIX_VAL="rag_pdfs/"
 
+        # RAG ingestion limits
+        RAG_MAX_CHUNKS_VAL="${{ vars.RAG_MAX_CHUNKS }}"
+        [ -z "$RAG_MAX_CHUNKS_VAL" ] && RAG_MAX_CHUNKS_VAL="${{ secrets.RAG_MAX_CHUNKS }}"
+        [ -z "$RAG_MAX_CHUNKS_VAL" ] && RAG_MAX_CHUNKS_VAL="3000"
+
         sudo tee /opt/holowellness/.env >/dev/null <<ENVEOF
         FLASK_ENV=production
         DEBUG=False
@@ -240,6 +245,7 @@ jobs:
         RAG_TRANSLATION_MAX_TOKENS="$RAG_TRANSLATION_MAX_TOKENS_VAL"
         RAG_S3_BUCKET="$RAG_S3_BUCKET_VAL"
         RAG_S3_PREFIX="$RAG_S3_PREFIX_VAL"
+        RAG_MAX_CHUNKS="$RAG_MAX_CHUNKS_VAL"
         APP_PUBLIC_URL="http://${PUBIP}"
         APP_TITLE="HoloWellness Chatbot"
 
@@ -418,6 +424,9 @@ jobs:
           sudo rm -rf /var/cache/apt/archives/* || true
           rm -rf ~/.cache/pip || true
           sudo rm -rf /tmp/* || true
+          # Clean old RAG caches if present
+          sudo rm -rf /opt/holowellness/cache/* || true
+          sudo journalctl --vacuum-size=50M || true
           echo "After cleanup:"
           df -h || true
         '
