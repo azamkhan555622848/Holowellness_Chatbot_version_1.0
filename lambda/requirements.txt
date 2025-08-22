@@ -1,15 +1,18 @@
-# Optimized Lambda requirements - only essential packages
+# Lambda requirements - hybrid BM25 + semantic search
 boto3>=1.26.0
 botocore>=1.29.0
 
 # Document processing (Lambda compatible)
 PyPDF2>=3.0.0  # Lightweight PDF processing for Lambda
-sentence-transformers>=2.2.0  # For embeddings
 
-# Vector search (lightweight alternatives)
-faiss-cpu>=1.7.4  # CPU-only FAISS for Lambda
-scikit-learn>=1.3.0  # For BM25 and preprocessing
+# Lightweight embeddings (Lambda compatible)
+transformers>=4.21.0  # For lightweight sentence embeddings
+torch>=1.12.0  # CPU-only PyTorch
+tokenizers>=0.13.0  # Fast tokenizers
+
+# Search and preprocessing (Lambda compatible)
+scikit-learn>=1.3.0  # For BM25 and TF-IDF
+numpy>=1.24.0  # Core numerical computing
 
 # Utilities
-numpy>=1.24.0
 psutil>=5.9.0  # For memory monitoring

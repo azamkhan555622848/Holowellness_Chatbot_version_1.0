@@ -301,8 +301,8 @@ class RAGIndexer:
         return chunks
         
     def build_indexes(self, documents: List[Dict]) -> Dict[str, str]:
-        """Build vector and BM25 indexes from documents"""
-        logger.info(f"Building indexes from {len(documents)} documents")
+        """Build hybrid BM25 + semantic vector indexes from documents"""
+        logger.info(f"Building hybrid indexes from {len(documents)} documents")
         
         if not documents:
             logger.warning("No documents to index")
@@ -313,51 +313,79 @@ class RAGIndexer:
             import pickle
             import gzip
             import json
-            from sentence_transformers import SentenceTransformer
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            import faiss
+            import torch
             import numpy as np
+            from transformers import AutoTokenizer, AutoModel
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            from sklearn.metrics.pairwise import cosine_similarity
             
             # Extract text content for indexing
             texts = [doc['content'] for doc in documents]
             
-            # Build vector index using sentence transformers
-            logger.info("Building vector embeddings...")
-            model = SentenceTransformer('all-MiniLM-L6-v2')  # Lightweight model for Lambda
-            embeddings = model.encode(texts, show_progress_bar=False)
+            # Use a very lightweight sentence transformer model
+            model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"  # Smallest available model
+            logger.info(f"Loading lightweight model: {model_name}")
             
-            # Create FAISS index
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModel.from_pretrained(model_name)
+            model.eval()  # Set to evaluation mode
+            
+            # Build semantic vector embeddings
+            logger.info("Building semantic embeddings...")
+            embeddings = []
+            
+            for text in texts:
+                # Tokenize and encode
+                inputs = tokenizer(text[:512], truncation=True, padding=True, 
+                                 return_tensors="pt", max_length=512)
+                
+                with torch.no_grad():
+                    outputs = model(**inputs)
+                    # Mean pooling
+                    embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+                    embeddings.append(embedding)
+            
+            embeddings = np.array(embeddings)
             dimension = embeddings.shape[1]
-            faiss_index = faiss.IndexFlatIP(dimension)  # Inner product for similarity
-            faiss_index.add(embeddings.astype('float32'))
             
-            # Build BM25-style index using TF-IDF
+            # Build BM25-style index using rank_bm25 approach with TF-IDF
             logger.info("Building BM25 index...")
             vectorizer = TfidfVectorizer(
                 max_features=10000,
                 stop_words='english',
                 ngram_range=(1, 2),
                 max_df=0.95,
-                min_df=2
+                min_df=1,
+                use_idf=True,
+                smooth_idf=True,
+                sublinear_tf=True
             )
-            tfidf_matrix = vectorizer.fit_transform(texts)
+            bm25_matrix = vectorizer.fit_transform(texts)
             
-            # Define file paths
+            # Define file paths (keeping same structure for compatibility)
             index_files = {
-                'vector_index': os.path.join(self.temp_dir, 'vector_index.faiss'),
+                'vector_index': os.path.join(self.temp_dir, 'vector_index.pkl'),
                 'bm25_index': os.path.join(self.temp_dir, 'bm25_index.pkl'),
                 'documents': os.path.join(self.temp_dir, 'documents.pkl.gz'),
                 'manifest': os.path.join(self.temp_dir, 'manifest.json')
             }
             
-            # Save FAISS index
-            faiss.write_index(faiss_index, index_files['vector_index'])
+            # Save semantic vector index (replaces FAISS with numpy/sklearn)
+            vector_data = {
+                'embeddings': embeddings,
+                'model_name': model_name,
+                'dimension': dimension,
+                'index_type': 'semantic_cosine'
+            }
+            with open(index_files['vector_index'], 'wb') as f:
+                pickle.dump(vector_data, f)
             
-            # Save BM25/TF-IDF components
+            # Save BM25 index
             bm25_data = {
                 'vectorizer': vectorizer,
-                'tfidf_matrix': tfidf_matrix,
-                'feature_names': vectorizer.get_feature_names_out()
+                'tfidf_matrix': bm25_matrix,
+                'feature_names': vectorizer.get_feature_names_out(),
+                'index_type': 'bm25_tfidf'
             }
             with open(index_files['bm25_index'], 'wb') as f:
                 pickle.dump(bm25_data, f)
@@ -366,19 +394,21 @@ class RAGIndexer:
             with gzip.open(index_files['documents'], 'wb') as f:
                 pickle.dump(documents, f)
             
-            # Create manifest
+            # Create manifest compatible with your existing system
             manifest = {
                 'documents_count': len(documents),
                 'embedding_dimension': dimension,
-                'model_name': 'all-MiniLM-L6-v2',
+                'model_name': model_name,
                 'created_at': time.time(),
-                'index_files': list(index_files.keys())
+                'index_files': list(index_files.keys()),
+                'search_type': 'hybrid_bm25_semantic',
+                'lambda_compatible': True
             }
             
             with open(index_files['manifest'], 'w') as f:
                 json.dump(manifest, f, indent=2)
             
-            logger.info(f"Successfully built indexes: {len(documents)} documents, {dimension}D embeddings")
+            logger.info(f"Successfully built hybrid indexes: {len(documents)} documents, {dimension}D semantic + BM25")
             return index_files
             
         except Exception as e:
