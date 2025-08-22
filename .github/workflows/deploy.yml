@@ -107,15 +107,51 @@ jobs:
         cp ../backend/enhanced_rag_qwen.py package/ 2>/dev/null || echo "⚠️  enhanced_rag_qwen.py not found, continuing..."
         cp ../backend/s3_cache.py package/ 2>/dev/null || echo "⚠️  s3_cache.py not found, continuing..."
         
-        # Optimize package size
-        echo "🧹 Optimizing package size..."
+        # Aggressive package size optimization for Lambda 50MB limit
+        echo "🧹 Aggressively optimizing package size..."
+        
+        # Remove test files and documentation
         find package/ -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+        find package/ -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
         find package/ -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
         find package/ -name "*.pyc" -delete 2>/dev/null || true
         find package/ -name "*.pyo" -delete 2>/dev/null || true
+        find package/ -name "*.pyd" -delete 2>/dev/null || true
+        
+        # Remove documentation and examples
         rm -rf package/*/examples/ 2>/dev/null || true
         rm -rf package/*/docs/ 2>/dev/null || true
+        rm -rf package/*/doc/ 2>/dev/null || true
         rm -rf package/*/*.egg-info/ 2>/dev/null || true
+        rm -rf package/*/LICENSE* 2>/dev/null || true
+        rm -rf package/*/README* 2>/dev/null || true
+        
+        # Remove large unnecessary scipy/sklearn components
+        rm -rf package/scipy/sparse/linalg/dsolve/SuperLU/ 2>/dev/null || true
+        rm -rf package/scipy/sparse/linalg/eigen/arpack/ 2>/dev/null || true
+        rm -rf package/sklearn/datasets/data/ 2>/dev/null || true
+        rm -rf package/sklearn/datasets/descr/ 2>/dev/null || true
+        rm -rf package/sklearn/datasets/images/ 2>/dev/null || true
+        
+        # Remove .so files we don't need (keep only essential ones)
+        find package/ -name "*.so" -size +5M -delete 2>/dev/null || true
+        
+        # Check package size
+        PACKAGE_SIZE_MB=$(du -sm package/ | cut -f1)
+        echo "📦 Package size after optimization: ${PACKAGE_SIZE_MB}MB"
+        
+        if [ "$PACKAGE_SIZE_MB" -gt 50 ]; then
+          echo "⚠️ Package still too large, applying extreme optimization..."
+          # Remove more unnecessary components if still too large
+          rm -rf package/scipy/optimize/ 2>/dev/null || true
+          rm -rf package/scipy/stats/ 2>/dev/null || true
+          rm -rf package/sklearn/ensemble/ 2>/dev/null || true
+          rm -rf package/sklearn/neural_network/ 2>/dev/null || true
+          
+          # Final size check
+          PACKAGE_SIZE_MB=$(du -sm package/ | cut -f1)
+          echo "📦 Final package size: ${PACKAGE_SIZE_MB}MB"
+        fi
         
         # Create deployment package
         echo "📦 Creating deployment ZIP..."
