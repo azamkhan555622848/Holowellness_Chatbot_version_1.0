@@ -296,9 +296,10 @@ jobs:
         
         # Test the function
         echo "🧪 Testing Lambda function..."
+        echo '{"test": true}' > test-payload.json
         aws lambda invoke \
           --function-name $FUNCTION_NAME \
-          --payload '{"test": true}' \
+          --payload file://test-payload.json \
           lambda-response.json
           
         echo "📋 Lambda response:"
