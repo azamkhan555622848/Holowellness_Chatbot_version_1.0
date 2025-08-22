@@ -89,12 +89,15 @@ jobs:
         # Create package directory
         mkdir -p package
         
-        # Install Lambda dependencies (Linux compatible)
+        # Install Lambda dependencies (try platform-specific first, fallback to normal install)
         echo "📦 Installing Lambda dependencies..."
-        pip install -r requirements.txt -t package/ \
+        if ! pip install -r requirements.txt -t package/ \
           --no-cache-dir \
           --platform linux_x86_64 \
-          --only-binary=:all:
+          --only-binary=:all:; then
+          echo "⚠️ Platform-specific install failed, trying standard install..."
+          pip install -r requirements.txt -t package/ --no-cache-dir
+        fi
         
         # Copy Lambda source code
         echo "📋 Copying Lambda source code..."

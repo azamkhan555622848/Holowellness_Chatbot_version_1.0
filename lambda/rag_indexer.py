@@ -339,9 +339,12 @@ class RAGIndexer:
             
             # Apply LSA (SVD) for semantic dimensionality reduction and concept extraction
             # This approximates neural semantic embeddings using classical techniques
-            lsa_components = min(384, min(tfidf_semantic.shape) - 1)  # Similar to sentence-transformer dimensions
+            lsa_components = min(256, min(tfidf_semantic.shape) - 1)  # Conservative dimensions for older sklearn
             lsa = TruncatedSVD(n_components=lsa_components, random_state=42)
             semantic_embeddings = lsa.fit_transform(tfidf_semantic)
+            
+            # Normalize embeddings (compatible with older sklearn versions)
+            from sklearn.preprocessing import normalize
             semantic_embeddings = normalize(semantic_embeddings, norm='l2')
             
             # Build BM25-style index using classic TF-IDF
@@ -379,11 +382,17 @@ class RAGIndexer:
             with open(index_files['vector_index'], 'wb') as f:
                 pickle.dump(vector_data, f)
             
-            # Save BM25 index
+            # Save BM25 index (compatible with older sklearn versions)
+            try:
+                feature_names = bm25_vectorizer.get_feature_names_out()
+            except AttributeError:
+                # Fallback for older sklearn versions
+                feature_names = bm25_vectorizer.get_feature_names()
+            
             bm25_data = {
                 'vectorizer': bm25_vectorizer,
                 'tfidf_matrix': bm25_matrix,
-                'feature_names': bm25_vectorizer.get_feature_names_out(),
+                'feature_names': feature_names,
                 'index_type': 'bm25_tfidf'
             }
             with open(index_files['bm25_index'], 'wb') as f:
