@@ -1,6 +1,5 @@
 # Ultra-minimal Lambda requirements for 50MB limit
-boto3>=1.26.0
-botocore>=1.29.0
+# Use Lambda's built-in boto3/botocore instead of vendoring to avoid size/issues
 
 # Document processing (very lightweight)
 PyPDF2>=3.0.0
