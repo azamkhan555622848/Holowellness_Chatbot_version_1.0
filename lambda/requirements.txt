@@ -1,18 +1,14 @@
-# Lambda requirements - hybrid BM25 + semantic search
+# Lambda requirements - hybrid BM25 + TF-IDF semantic search
 boto3>=1.26.0
 botocore>=1.29.0
 
 # Document processing (Lambda compatible)
-PyPDF2>=3.0.0  # Lightweight PDF processing for Lambda
+PyPDF2>=3.0.0
 
-# Lightweight embeddings (Lambda compatible)
-transformers>=4.21.0  # For lightweight sentence embeddings
-torch>=1.12.0  # CPU-only PyTorch
-tokenizers>=0.13.0  # Fast tokenizers
-
-# Search and preprocessing (Lambda compatible)
-scikit-learn>=1.3.0  # For BM25 and TF-IDF
+# Search and preprocessing (Lambda compatible - no PyTorch needed)
+scikit-learn>=1.3.0  # For TF-IDF, cosine similarity, and BM25
 numpy>=1.24.0  # Core numerical computing
+scipy>=1.10.0  # Additional scientific computing
 
 # Utilities
 psutil>=5.9.0  # For memory monitoring

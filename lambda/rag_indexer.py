@@ -301,8 +301,8 @@ class RAGIndexer:
         return chunks
         
     def build_indexes(self, documents: List[Dict]) -> Dict[str, str]:
-        """Build hybrid BM25 + semantic vector indexes from documents"""
-        logger.info(f"Building hybrid indexes from {len(documents)} documents")
+        """Build advanced hybrid BM25 + TF-IDF semantic indexes from documents"""
+        logger.info(f"Building advanced hybrid indexes from {len(documents)} documents")
         
         if not documents:
             logger.warning("No documents to index")
@@ -313,44 +313,40 @@ class RAGIndexer:
             import pickle
             import gzip
             import json
-            import torch
             import numpy as np
-            from transformers import AutoTokenizer, AutoModel
             from sklearn.feature_extraction.text import TfidfVectorizer
             from sklearn.metrics.pairwise import cosine_similarity
+            from sklearn.decomposition import TruncatedSVD
+            from sklearn.preprocessing import normalize
             
             # Extract text content for indexing
             texts = [doc['content'] for doc in documents]
             
-            # Use a very lightweight sentence transformer model
-            model_name = "sentence-transformers/paraphrase-MiniLM-L3-v2"  # Smallest available model
-            logger.info(f"Loading lightweight model: {model_name}")
+            # Build advanced semantic vector index using TF-IDF + LSA (Latent Semantic Analysis)
+            logger.info("Building semantic TF-IDF + LSA embeddings...")
+            semantic_vectorizer = TfidfVectorizer(
+                max_features=20000,  # Higher dimensionality for better semantics
+                stop_words='english',
+                ngram_range=(1, 3),  # Include trigrams for better context
+                max_df=0.95,
+                min_df=1,
+                use_idf=True,
+                smooth_idf=True,
+                sublinear_tf=True,
+                norm='l2'
+            )
+            tfidf_semantic = semantic_vectorizer.fit_transform(texts)
             
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            model = AutoModel.from_pretrained(model_name)
-            model.eval()  # Set to evaluation mode
+            # Apply LSA (SVD) for semantic dimensionality reduction and concept extraction
+            # This approximates neural semantic embeddings using classical techniques
+            lsa_components = min(384, min(tfidf_semantic.shape) - 1)  # Similar to sentence-transformer dimensions
+            lsa = TruncatedSVD(n_components=lsa_components, random_state=42)
+            semantic_embeddings = lsa.fit_transform(tfidf_semantic)
+            semantic_embeddings = normalize(semantic_embeddings, norm='l2')
             
-            # Build semantic vector embeddings
-            logger.info("Building semantic embeddings...")
-            embeddings = []
-            
-            for text in texts:
-                # Tokenize and encode
-                inputs = tokenizer(text[:512], truncation=True, padding=True, 
-                                 return_tensors="pt", max_length=512)
-                
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                    # Mean pooling
-                    embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
-                    embeddings.append(embedding)
-            
-            embeddings = np.array(embeddings)
-            dimension = embeddings.shape[1]
-            
-            # Build BM25-style index using rank_bm25 approach with TF-IDF
-            logger.info("Building BM25 index...")
-            vectorizer = TfidfVectorizer(
+            # Build BM25-style index using classic TF-IDF
+            logger.info("Building BM25 TF-IDF index...")
+            bm25_vectorizer = TfidfVectorizer(
                 max_features=10000,
                 stop_words='english',
                 ngram_range=(1, 2),
@@ -358,9 +354,10 @@ class RAGIndexer:
                 min_df=1,
                 use_idf=True,
                 smooth_idf=True,
-                sublinear_tf=True
+                sublinear_tf=True,
+                norm='l2'
             )
-            bm25_matrix = vectorizer.fit_transform(texts)
+            bm25_matrix = bm25_vectorizer.fit_transform(texts)
             
             # Define file paths (keeping same structure for compatibility)
             index_files = {
@@ -370,21 +367,23 @@ class RAGIndexer:
                 'manifest': os.path.join(self.temp_dir, 'manifest.json')
             }
             
-            # Save semantic vector index (replaces FAISS with numpy/sklearn)
+            # Save semantic vector index (TF-IDF + LSA approximating neural embeddings)
             vector_data = {
-                'embeddings': embeddings,
-                'model_name': model_name,
-                'dimension': dimension,
-                'index_type': 'semantic_cosine'
+                'embeddings': semantic_embeddings,
+                'vectorizer': semantic_vectorizer,
+                'lsa_model': lsa,
+                'dimension': semantic_embeddings.shape[1],
+                'index_type': 'tfidf_lsa_semantic',
+                'explained_variance_ratio': lsa.explained_variance_ratio_.sum()
             }
             with open(index_files['vector_index'], 'wb') as f:
                 pickle.dump(vector_data, f)
             
             # Save BM25 index
             bm25_data = {
-                'vectorizer': vectorizer,
+                'vectorizer': bm25_vectorizer,
                 'tfidf_matrix': bm25_matrix,
-                'feature_names': vectorizer.get_feature_names_out(),
+                'feature_names': bm25_vectorizer.get_feature_names_out(),
                 'index_type': 'bm25_tfidf'
             }
             with open(index_files['bm25_index'], 'wb') as f:
@@ -397,18 +396,23 @@ class RAGIndexer:
             # Create manifest compatible with your existing system
             manifest = {
                 'documents_count': len(documents),
-                'embedding_dimension': dimension,
-                'model_name': model_name,
+                'embedding_dimension': semantic_embeddings.shape[1],
+                'model_name': 'tfidf_lsa_semantic',
+                'lsa_components': lsa_components,
+                'explained_variance': float(lsa.explained_variance_ratio_.sum()),
                 'created_at': time.time(),
                 'index_files': list(index_files.keys()),
-                'search_type': 'hybrid_bm25_semantic',
-                'lambda_compatible': True
+                'search_type': 'hybrid_bm25_tfidf_lsa',
+                'lambda_compatible': True,
+                'no_neural_network': True
             }
             
             with open(index_files['manifest'], 'w') as f:
                 json.dump(manifest, f, indent=2)
             
-            logger.info(f"Successfully built hybrid indexes: {len(documents)} documents, {dimension}D semantic + BM25")
+            logger.info(f"Successfully built advanced hybrid indexes: {len(documents)} documents, "
+                       f"{semantic_embeddings.shape[1]}D LSA semantic + BM25, "
+                       f"variance explained: {lsa.explained_variance_ratio_.sum():.3f}")
             return index_files
             
         except Exception as e:
