@@ -212,37 +212,178 @@ class RAGIndexer:
         return batch_result
         
     def _process_single_pdf(self, pdf_path: str) -> List[Dict]:
-        """Process single PDF and extract documents"""
-        # Implement your PDF processing logic here
-        # This is a placeholder - adapt from your enhanced_rag_qwen.py
+        """Process single PDF and extract documents using PyPDF2"""
+        import PyPDF2
+        import re
         
         documents = []
         logger.info(f"Processing PDF: {pdf_path}")
         
-        # Add your PDF processing code here:
-        # - Extract text using PyMuPDF or similar
-        # - Chunk text appropriately  
-        # - Generate embeddings
-        # - Return structured documents
-        
+        try:
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                
+                # Extract text from all pages
+                full_text = ""
+                for page_num, page in enumerate(pdf_reader.pages):
+                    try:
+                        page_text = page.extract_text()
+                        if page_text:
+                            full_text += f"\n--- Page {page_num + 1} ---\n{page_text}"
+                    except Exception as e:
+                        logger.warning(f"Failed to extract text from page {page_num + 1}: {e}")
+                
+                if full_text.strip():
+                    # Clean and chunk the text
+                    cleaned_text = self._clean_text(full_text)
+                    chunks = self._chunk_text(cleaned_text, pdf_path)
+                    documents.extend(chunks)
+                    
+                    logger.info(f"Extracted {len(chunks)} chunks from {pdf_path}")
+                else:
+                    logger.warning(f"No text extracted from {pdf_path}")
+                    
+        except Exception as e:
+            logger.error(f"Error processing PDF {pdf_path}: {str(e)}")
+            
         return documents
+    
+    def _clean_text(self, text: str) -> str:
+        """Clean extracted text"""
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text)
+        # Remove page markers
+        text = re.sub(r'--- Page \d+ ---', '', text)
+        # Remove special characters that might cause issues
+        text = re.sub(r'[^\w\s\.\,\!\?\;\:\-\(\)]', ' ', text)
+        return text.strip()
+    
+    def _chunk_text(self, text: str, source_file: str, chunk_size: int = 1000, overlap: int = 200) -> List[Dict]:
+        """Split text into overlapping chunks"""
+        chunks = []
+        
+        # Simple sentence-aware chunking
+        sentences = re.split(r'[.!?]+', text)
+        current_chunk = ""
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
+            # If adding this sentence would exceed chunk size, start new chunk
+            if len(current_chunk) + len(sentence) > chunk_size and current_chunk:
+                chunks.append({
+                    'content': current_chunk.strip(),
+                    'source': source_file,
+                    'chunk_id': len(chunks),
+                    'char_count': len(current_chunk)
+                })
+                
+                # Start new chunk with overlap
+                words = current_chunk.split()
+                if len(words) > overlap // 10:  # Rough word-based overlap
+                    current_chunk = ' '.join(words[-(overlap // 10):]) + ' ' + sentence
+                else:
+                    current_chunk = sentence
+            else:
+                current_chunk += ' ' + sentence
+        
+        # Add final chunk
+        if current_chunk.strip():
+            chunks.append({
+                'content': current_chunk.strip(),
+                'source': source_file,
+                'chunk_id': len(chunks),
+                'char_count': len(current_chunk)
+            })
+        
+        return chunks
         
     def build_indexes(self, documents: List[Dict]) -> Dict[str, str]:
         """Build vector and BM25 indexes from documents"""
         logger.info(f"Building indexes from {len(documents)} documents")
         
-        # Implement index building logic
-        # Return paths to created index files
-        index_files = {
-            'vector_index': os.path.join(self.temp_dir, 'vector_index.faiss'),
-            'bm25_index': os.path.join(self.temp_dir, 'bm25_index.pkl'),
-            'documents': os.path.join(self.temp_dir, 'documents.pkl.gz'),
-            'manifest': os.path.join(self.temp_dir, 'manifest.json')
-        }
+        if not documents:
+            logger.warning("No documents to index")
+            return {}
         
-        # Your index building code here...
-        
-        return index_files
+        try:
+            # Import dependencies here to reduce cold start
+            import pickle
+            import gzip
+            import json
+            from sentence_transformers import SentenceTransformer
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            import faiss
+            import numpy as np
+            
+            # Extract text content for indexing
+            texts = [doc['content'] for doc in documents]
+            
+            # Build vector index using sentence transformers
+            logger.info("Building vector embeddings...")
+            model = SentenceTransformer('all-MiniLM-L6-v2')  # Lightweight model for Lambda
+            embeddings = model.encode(texts, show_progress_bar=False)
+            
+            # Create FAISS index
+            dimension = embeddings.shape[1]
+            faiss_index = faiss.IndexFlatIP(dimension)  # Inner product for similarity
+            faiss_index.add(embeddings.astype('float32'))
+            
+            # Build BM25-style index using TF-IDF
+            logger.info("Building BM25 index...")
+            vectorizer = TfidfVectorizer(
+                max_features=10000,
+                stop_words='english',
+                ngram_range=(1, 2),
+                max_df=0.95,
+                min_df=2
+            )
+            tfidf_matrix = vectorizer.fit_transform(texts)
+            
+            # Define file paths
+            index_files = {
+                'vector_index': os.path.join(self.temp_dir, 'vector_index.faiss'),
+                'bm25_index': os.path.join(self.temp_dir, 'bm25_index.pkl'),
+                'documents': os.path.join(self.temp_dir, 'documents.pkl.gz'),
+                'manifest': os.path.join(self.temp_dir, 'manifest.json')
+            }
+            
+            # Save FAISS index
+            faiss.write_index(faiss_index, index_files['vector_index'])
+            
+            # Save BM25/TF-IDF components
+            bm25_data = {
+                'vectorizer': vectorizer,
+                'tfidf_matrix': tfidf_matrix,
+                'feature_names': vectorizer.get_feature_names_out()
+            }
+            with open(index_files['bm25_index'], 'wb') as f:
+                pickle.dump(bm25_data, f)
+            
+            # Save documents (compressed)
+            with gzip.open(index_files['documents'], 'wb') as f:
+                pickle.dump(documents, f)
+            
+            # Create manifest
+            manifest = {
+                'documents_count': len(documents),
+                'embedding_dimension': dimension,
+                'model_name': 'all-MiniLM-L6-v2',
+                'created_at': time.time(),
+                'index_files': list(index_files.keys())
+            }
+            
+            with open(index_files['manifest'], 'w') as f:
+                json.dump(manifest, f, indent=2)
+            
+            logger.info(f"Successfully built indexes: {len(documents)} documents, {dimension}D embeddings")
+            return index_files
+            
+        except Exception as e:
+            logger.error(f"Error building indexes: {str(e)}")
+            raise
 
 def create_manifest(config: IndexingConfig, result: IndexingResult) -> Dict[str, Any]:
     """Create manifest file for cache compatibility"""

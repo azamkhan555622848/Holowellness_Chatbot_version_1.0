@@ -2,8 +2,8 @@
 boto3>=1.26.0
 botocore>=1.29.0
 
-# Document processing
-PyMuPDF>=1.23.0  # Lightweight PDF processing
+# Document processing (Lambda compatible)
+PyPDF2>=3.0.0  # Lightweight PDF processing for Lambda
 sentence-transformers>=2.2.0  # For embeddings
 
 # Vector search (lightweight alternatives)
