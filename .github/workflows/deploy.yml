@@ -305,18 +305,17 @@ jobs:
         echo "✅ Lambda function deployed successfully!"
         
         # Test the function
-        echo "🧪 Testing Lambda function..."
-        # Create test payload with printf to avoid encoding issues
-        printf '{"test": true}' > test-payload.json
+        echo "Testing Lambda function..."
+        # Create clean UTF-8 JSON payload without BOM using hex approach
+        echo -ne '\x7b\x22\x74\x65\x73\x74\x22\x3a\x20\x74\x72\x75\x65\x7d' > test-payload.json
         
-        # Verify payload content
-        echo "Payload content:"
-        cat test-payload.json
-        echo ""
+        # Verify payload with hex dump to check encoding
+        echo "Payload hex dump:"
+        xxd test-payload.json || hexdump -C test-payload.json || od -t x1 test-payload.json
         
         aws lambda invoke \
           --function-name $FUNCTION_NAME \
-          --payload file://test-payload.json \
+          --payload fileb://test-payload.json \
           lambda-response.json
           
         echo "📋 Lambda response:"
