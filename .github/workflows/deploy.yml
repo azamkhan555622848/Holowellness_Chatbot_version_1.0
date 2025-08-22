@@ -80,6 +80,191 @@ jobs:
         cd deployment
         tar -czf ../holowellness-deployment.tar.gz .
         
+    # Deploy Lambda function for RAG indexing
+    - name: Build Lambda deployment package
+      run: |
+        echo "🔧 Building Lambda deployment package for RAG indexing..."
+        cd lambda
+        
+        # Create package directory
+        mkdir -p package
+        
+        # Install Lambda dependencies (Linux compatible)
+        echo "📦 Installing Lambda dependencies..."
+        pip install -r requirements.txt -t package/ \
+          --no-cache-dir \
+          --platform linux_x86_64 \
+          --only-binary=:all:
+        
+        # Copy Lambda source code
+        echo "📋 Copying Lambda source code..."
+        cp rag_indexer.py package/
+        
+        # Copy shared modules from backend (if they exist)
+        cp ../backend/enhanced_rag_qwen.py package/ 2>/dev/null || echo "⚠️  enhanced_rag_qwen.py not found, continuing..."
+        cp ../backend/s3_cache.py package/ 2>/dev/null || echo "⚠️  s3_cache.py not found, continuing..."
+        
+        # Optimize package size
+        echo "🧹 Optimizing package size..."
+        find package/ -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+        find package/ -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+        find package/ -name "*.pyc" -delete 2>/dev/null || true
+        find package/ -name "*.pyo" -delete 2>/dev/null || true
+        rm -rf package/*/examples/ 2>/dev/null || true
+        rm -rf package/*/docs/ 2>/dev/null || true
+        rm -rf package/*/*.egg-info/ 2>/dev/null || true
+        
+        # Create deployment package
+        echo "📦 Creating deployment ZIP..."
+        cd package
+        zip -r ../rag_indexer.zip . -x "*.DS_Store*" "*.git*"
+        cd ..
+        
+        # Display package info
+        PACKAGE_SIZE=$(ls -lh rag_indexer.zip | awk '{print $5}')
+        echo "✅ Lambda package created: rag_indexer.zip ($PACKAGE_SIZE)"
+        
+    - name: Deploy Lambda function
+      run: |
+        echo "🚀 Deploying Lambda function for RAG indexing..."
+        cd lambda
+        
+        FUNCTION_NAME="holowellness-rag-indexer"
+        
+        # Check if function exists
+        if aws lambda get-function --function-name $FUNCTION_NAME >/dev/null 2>&1; then
+          echo "🔄 Updating existing Lambda function..."
+          
+          # Update function code
+          aws lambda update-function-code \
+            --function-name $FUNCTION_NAME \
+            --zip-file fileb://rag_indexer.zip
+            
+          # Update function configuration
+          aws lambda update-function-configuration \
+            --function-name $FUNCTION_NAME \
+            --memory-size 3008 \
+            --timeout 900 \
+            --environment Variables="{
+              S3_BUCKET=holowellness,
+              S3_PDFS_PREFIX=rag_pdfs/,
+              S3_CACHE_PREFIX=cache/current/,
+              BATCH_SIZE=3,
+              MAX_MEMORY_MB=2800
+            }"
+            
+        else
+          echo "🆕 Creating new Lambda function..."
+          
+          # Create IAM role if it doesn't exist
+          ROLE_NAME="holowellness-lambda-role"
+          if ! aws iam get-role --role-name $ROLE_NAME >/dev/null 2>&1; then
+            echo "🔐 Creating IAM role for Lambda..."
+            
+            # Create trust policy
+            cat > trust-policy.json << 'TRUST_POLICY'
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "lambda.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        }
+        TRUST_POLICY
+        
+            # Create execution policy
+            cat > execution-policy.json << 'EXEC_POLICY'
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "logs:CreateLogGroup",
+                        "logs:CreateLogStream",
+                        "logs:PutLogEvents"
+                    ],
+                    "Resource": "arn:aws:logs:*:*:*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "s3:GetObject",
+                        "s3:PutObject",
+                        "s3:ListBucket"
+                    ],
+                    "Resource": [
+                        "arn:aws:s3:::holowellness",
+                        "arn:aws:s3:::holowellness/*"
+                    ]
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "xray:PutTraceSegments",
+                        "xray:PutTelemetryRecords"
+                    ],
+                    "Resource": "*"
+                }
+            ]
+        }
+        EXEC_POLICY
+        
+            # Create role
+            aws iam create-role \
+              --role-name $ROLE_NAME \
+              --assume-role-policy-document file://trust-policy.json
+              
+            # Attach policies
+            aws iam put-role-policy \
+              --role-name $ROLE_NAME \
+              --policy-name "${ROLE_NAME}-execution-policy" \
+              --policy-document file://execution-policy.json
+              
+            # Wait for role to be ready
+            echo "⏳ Waiting for IAM role to be ready..."
+            sleep 15
+          fi
+          
+          # Get role ARN
+          ROLE_ARN=$(aws iam get-role --role-name $ROLE_NAME --query 'Role.Arn' --output text)
+          
+          # Create function
+          aws lambda create-function \
+            --function-name $FUNCTION_NAME \
+            --runtime python3.9 \
+            --role $ROLE_ARN \
+            --handler rag_indexer.lambda_handler \
+            --zip-file fileb://rag_indexer.zip \
+            --memory-size 3008 \
+            --timeout 900 \
+            --environment Variables="{
+              S3_BUCKET=holowellness,
+              S3_PDFS_PREFIX=rag_pdfs/,
+              S3_CACHE_PREFIX=cache/current/,
+              BATCH_SIZE=3,
+              MAX_MEMORY_MB=2800
+            }" \
+            --tracing-config Mode=Active
+        fi
+        
+        echo "✅ Lambda function deployed successfully!"
+        
+        # Test the function
+        echo "🧪 Testing Lambda function..."
+        aws lambda invoke \
+          --function-name $FUNCTION_NAME \
+          --payload '{"test": true}' \
+          lambda-response.json
+          
+        echo "📋 Lambda response:"
+        cat lambda-response.json || echo "No response file"
+        
     # Removed S3 upload to avoid /tmp space issues on EC2 and simplify deploy
     
     - name: Resolve EC2 instance (reuse existing)

@@ -7,6 +7,11 @@ import requests
 import json
 import docx
 try:
+    from pdfminer.high_level import extract_text as pdfminer_extract_text
+    PDFMINER_AVAILABLE = True
+except Exception:
+    PDFMINER_AVAILABLE = False
+try:
     import pytesseract
     PYTESSERACT_AVAILABLE = True
 except ImportError:
@@ -130,7 +135,16 @@ class RAGSystem:
                         # Mark page for OCR if little/no text extracted
                         pages_needing_ocr.append(page_num)
                 
-                # If we have pages that need OCR
+                # If we have many pages that need OCR and pdfminer is available, try pdfminer full-doc extraction first
+                if pages_needing_ocr and PDFMINER_AVAILABLE:
+                    try:
+                        alt_text = pdfminer_extract_text(file_path) or ""
+                        if len(alt_text.strip()) > len(text.strip()):
+                            text = alt_text
+                            pages_needing_ocr = []  # satisfied using pdfminer
+                    except Exception as e:
+                        print(f"pdfminer extraction failed for {file_path}: {e}")
+                # If still pages need OCR and OCR stack is available
                 if pages_needing_ocr:
                     print(f"OCR needed for {len(pages_needing_ocr)} pages in {os.path.basename(file_path)}")
                     ocr_text = self._extract_text_with_ocr(file_path, pages_needing_ocr)
@@ -138,10 +152,13 @@ class RAGSystem:
                 
         except Exception as e:
             print(f"Error reading PDF {file_path}: {e}")
-            # If PyPDF2 fails completely, try OCR on the entire document
+            # If PyPDF2 fails completely, try pdfminer first, then OCR for entire document
             try:
-                print(f"Falling back to OCR for entire document: {os.path.basename(file_path)}")
-                text = self._extract_text_with_ocr(file_path)
+                if PDFMINER_AVAILABLE:
+                    text = pdfminer_extract_text(file_path) or ""
+                if not text.strip():
+                    print(f"Falling back to OCR for entire document: {os.path.basename(file_path)}")
+                    text = self._extract_text_with_ocr(file_path)
             except Exception as ocr_error:
                 print(f"OCR also failed for {file_path}: {ocr_error}")
         

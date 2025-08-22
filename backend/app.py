@@ -12,6 +12,7 @@ from bson.json_util import dumps
 from bson import ObjectId, errors
 from sync_rag_pdfs import sync_pdfs_from_s3
 from s3_cache import try_download_caches, try_upload_caches
+from lambda_client import LambdaIndexingClient
 import re
 
 # Load environment variables
@@ -699,6 +700,89 @@ def reindex_rag():
         })
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/api/rag/reindex-lambda', methods=['POST'])
+def reindex_rag_lambda():
+    """
+    Lambda-based reindexing - offloads heavy processing to AWS Lambda
+    Solves disk space issues on EC2 by processing in Lambda /tmp
+    """
+    try:
+        # Check if Lambda indexing is enabled
+        use_lambda = os.getenv('USE_LAMBDA_INDEXING', 'false').lower() == 'true'
+        
+        if not use_lambda:
+            return jsonify({
+                'status': 'error',
+                'message': 'Lambda indexing not enabled. Set USE_LAMBDA_INDEXING=true'
+            }), 400
+            
+        # Initialize Lambda client
+        lambda_client = LambdaIndexingClient(
+            function_name=os.getenv('LAMBDA_FUNCTION_NAME', 'holowellness-rag-indexer'),
+            region=os.getenv('AWS_REGION', 'ap-northeast-3'),
+            s3_bucket=RAG_S3_BUCKET,
+            s3_cache_prefix=os.getenv('S3_CACHE_PREFIX', 'cache/current/')
+        )
+        
+        logger.info("🚀 Starting Lambda-based reindexing...")
+        
+        # Trigger Lambda indexing with completion monitoring
+        result = lambda_client.reindex_and_update(timeout_seconds=600)
+        
+        if result['success']:
+            # Clear local RAG state to force reload from fresh S3 cache
+            if hasattr(rag, 'documents'):
+                rag.documents = []
+            if hasattr(rag, 'vector_store'):
+                rag.vector_store = None
+            if hasattr(rag, 'bm25_index'):
+                rag.bm25_index = None
+                
+            # Force reload from the fresh S3 cache
+            try_download_caches(rag)
+            
+            # Update database status
+            try:
+                for rag_file in memory_manager.ragfiles_collection.find({}):
+                    memory_manager.ragfiles_collection.update_one(
+                        {"_id": rag_file["_id"]},
+                        {"$set": {
+                            "ingestion_status": "success",
+                            "ingestion_message": "Lambda indexing completed successfully.",
+                            "date_modified": datetime.utcnow()
+                        }}
+                    )
+            except Exception as db_error:
+                logger.warning(f"Database update failed: {db_error}")
+            
+            return jsonify({
+                'status': 'ok',
+                'message': 'Lambda indexing completed successfully',
+                'method': 'lambda',
+                'job_id': result['job_id'],
+                'processing_time': result['processing_time'],
+                'documents_processed': result.get('documents_processed', 0),
+                'cache_size_mb': result.get('cache_size_mb', 0),
+                'documents_indexed': len(rag.documents) if rag and hasattr(rag, 'documents') else 0
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f"Lambda indexing failed: {result.get('error', 'Unknown error')}",
+                'method': 'lambda',
+                'job_id': result.get('job_id'),
+                'details': result
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Lambda reindex error: {str(e)}")
+        return jsonify({
+            'status': 'error', 
+            'message': f'Lambda indexing error: {str(e)}',
+            'method': 'lambda'
+        }), 500
 
 
 @app.route('/api/rag/status', methods=['GET'])
