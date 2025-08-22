@@ -179,6 +179,11 @@ jobs:
             --function-name $FUNCTION_NAME \
             --zip-file fileb://rag_indexer.zip
             
+          # Wait for code update to complete
+          echo "⏳ Waiting for function update to complete..."
+          aws lambda wait function-updated \
+            --function-name $FUNCTION_NAME
+            
           # Update function configuration
           aws lambda update-function-configuration \
             --function-name $FUNCTION_NAME \
@@ -291,6 +296,11 @@ jobs:
             }" \
             --tracing-config Mode=Active
         fi
+        
+        # Wait for final configuration to be active
+        echo "⏳ Waiting for Lambda function to be ready..."
+        aws lambda wait function-updated \
+          --function-name $FUNCTION_NAME
         
         echo "✅ Lambda function deployed successfully!"
         
