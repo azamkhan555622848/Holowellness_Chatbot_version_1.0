@@ -56,13 +56,62 @@ class ResourceMonitor:
         
     def check_memory_usage(self) -> Dict[str, float]:
         """Check memory usage (simplified for Lambda)"""
-        import psutil
-        process = psutil.Process()
-        memory_info = process.memory_info()
-        return {
-            'used_mb': memory_info.rss / 1024 / 1024,
-            'available_mb': self.memory_limit_mb - (memory_info.rss / 1024 / 1024)
-        }
+        # Prefer psutil if available for accurate process RSS
+        try:
+            import psutil  # type: ignore
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            used_mb = memory_info.rss / 1024 / 1024
+            return {
+                'used_mb': used_mb,
+                'available_mb': max(0.0, self.memory_limit_mb - used_mb)
+            }
+        except Exception:
+            # Fallback 1: parse /proc/self/status (VmRSS in kB)
+            try:
+                with open('/proc/self/status', 'r') as f:
+                    for line in f:
+                        if line.startswith('VmRSS:'):
+                            parts = line.split()
+                            # Example: VmRSS:\t  123456 kB
+                            rss_kb = float(parts[1])
+                            used_mb = rss_kb / 1024.0
+                            return {
+                                'used_mb': used_mb,
+                                'available_mb': max(0.0, self.memory_limit_mb - used_mb)
+                            }
+            except Exception:
+                pass
+
+            # Fallback 2: parse /proc/meminfo for system available; use conservative estimate
+            try:
+                mem_total_mb = None
+                mem_available_mb = None
+                with open('/proc/meminfo', 'r') as f:
+                    for line in f:
+                        if line.startswith('MemTotal:'):
+                            mem_total_mb = float(line.split()[1]) / 1024.0
+                        elif line.startswith('MemAvailable:'):
+                            mem_available_mb = float(line.split()[1]) / 1024.0
+                if mem_total_mb is not None and mem_available_mb is not None:
+                    used_mb = max(0.0, mem_total_mb - mem_available_mb)
+                    # Bound by Lambda function memory limit
+                    available_mb = max(0.0, min(self.memory_limit_mb, mem_available_mb))
+                    return {
+                        'used_mb': used_mb,
+                        'available_mb': available_mb
+                    }
+            except Exception:
+                pass
+
+            # Last resort: return conservative values so processing can continue
+            # Assume small usage and keep a fixed safety buffer
+            used_mb = 128.0
+            available_mb = max(0.0, self.memory_limit_mb - used_mb)
+            return {
+                'used_mb': used_mb,
+                'available_mb': available_mb
+            }
         
     def should_continue(self) -> bool:
         """Check if we should continue processing"""
