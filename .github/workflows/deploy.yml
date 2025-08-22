@@ -306,7 +306,8 @@ jobs:
         
         # Test the function
         echo "🧪 Testing Lambda function..."
-        echo '{"test": true}' > test-payload.json
+        # Use base64 encoding to avoid shell escaping issues
+        echo 'eyJ0ZXN0IjogdHJ1ZX0=' | base64 -d > test-payload.json
         aws lambda invoke \
           --function-name $FUNCTION_NAME \
           --payload file://test-payload.json \
