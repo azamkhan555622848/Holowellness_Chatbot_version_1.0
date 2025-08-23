@@ -30,11 +30,12 @@ if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION >/dev
         --function-name $FUNCTION_NAME \
         --memory-size 3008 \
         --timeout 900 \
+        --ephemeral-storage Size=10240 \
         --environment Variables="{
             S3_BUCKET=$S3_BUCKET,
             S3_PDFS_PREFIX=rag_pdfs/,
             S3_CACHE_PREFIX=cache/current/,
-            BATCH_SIZE=3,
+            BATCH_SIZE=1,
             MAX_MEMORY_MB=2800
         }" \
         --region $REGION
@@ -130,11 +131,12 @@ EOF
         --zip-file fileb://rag_indexer.zip \
         --memory-size 3008 \
         --timeout 900 \
+        --ephemeral-storage Size=10240 \
         --environment Variables="{
             S3_BUCKET=$S3_BUCKET,
             S3_PDFS_PREFIX=rag_pdfs/,
             S3_CACHE_PREFIX=cache/current/,
-            BATCH_SIZE=3,
+            BATCH_SIZE=1,
             MAX_MEMORY_MB=2800
         }" \
         --tracing-config Mode=Active \
