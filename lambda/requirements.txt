@@ -9,3 +9,6 @@ numpy==1.21.6
 
 # Text processing only (much smaller than full scikit-learn)
 # We'll implement custom TF-IDF to avoid large sklearn package
+
+# Runtime typing helpers required by some libs on Python 3.9
+typing_extensions>=4.0.0
