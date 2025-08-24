@@ -4,8 +4,8 @@
 # Document processing (very lightweight)
 PyPDF2>=3.0.0
 
-# Only essential scientific computing
-numpy==1.21.6
+# Only essential scientific computing (compatible manylinux2014 wheel for Python 3.9)
+numpy==1.26.4
 
 # Text processing only (much smaller than full scikit-learn)
 # We'll implement custom TF-IDF to avoid large sklearn package

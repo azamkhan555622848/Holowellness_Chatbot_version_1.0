@@ -11,9 +11,22 @@ rm -rf package/ rag_indexer.zip
 # Create package directory
 mkdir -p package
 
-# Install dependencies
-echo "📦 Installing dependencies..."
-pip install -r requirements.txt -t package/ --no-cache-dir --platform linux_x86_64 --only-binary=:all:
+# Install dependencies (download manylinux2014 cp39 wheels, then install locally)
+echo "📦 Installing dependencies (manylinux2014 cp39 wheels)..."
+rm -rf wheelhouse
+mkdir -p wheelhouse
+
+# Download prebuilt wheels compatible with Lambda (Python 3.9, manylinux2014, cp)
+pip download -r requirements.txt \
+  --dest wheelhouse \
+  --only-binary=:all: \
+  --platform manylinux2014_x86_64 \
+  --implementation cp \
+  --python-version 39 \
+  --no-deps
+
+# Install from local wheelhouse without hitting PyPI again
+pip install -r requirements.txt -t package/ --no-index -f wheelhouse --no-cache-dir
 
 # Copy source code
 echo "📋 Copying source code..."
