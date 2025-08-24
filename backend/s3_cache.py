@@ -11,7 +11,8 @@ def _s3_client():
 
 
 def _config():
-    bucket = os.getenv("S3_CACHE_BUCKET") or os.getenv("RAG_S3_BUCKET")
+    # Accept multiple env var names for bucket for compatibility with Lambda deploys
+    bucket = os.getenv("S3_CACHE_BUCKET") or os.getenv("RAG_S3_BUCKET") or os.getenv("S3_BUCKET")
     prefix = os.getenv("S3_CACHE_PREFIX", "cache/current/")
     delete_local = os.getenv("S3_CACHE_DELETE_LOCAL", "true").lower() == "true"
     return bucket, prefix.rstrip("/") + "/", delete_local
@@ -35,6 +36,7 @@ def _manifest_key(prefix: str) -> str:
 
 
 def _keys(prefix: str) -> Dict[str, str]:
+    # Primary artifacts; vector index is optional and may be absent
     return {
         "documents": f"{prefix}documents.pkl.gz",
         "bm25": f"{prefix}bm25_index.pkl",
@@ -59,34 +61,39 @@ def try_download_caches(rag) -> bool:
     bucket, prefix, _ = _config()
     s3 = _s3_client()
 
-    # Read manifest
+    # Read manifest if present; be tolerant of schema differences
+    manifest = {}
     try:
         obj = s3.get_object(Bucket=bucket, Key=_manifest_key(prefix))
         manifest = json.loads(obj["Body"].read().decode("utf-8"))
     except Exception:
-        return False
-
-    current_cfg = {
-        "embeddings_model": rag.embeddings_model_name,
-        "chunk_size": rag.chunk_size,
-        "chunk_overlap": rag.chunk_overlap,
-    }
-    if manifest.get("config") != current_cfg:
-        return False
+        manifest = {}
 
     keys = _keys(prefix)
     paths = _local_paths(rag)
     os.makedirs(os.path.dirname(paths["documents"]), exist_ok=True)
 
-    # Download each artifact if etag/hash exists in manifest
-    try:
-        for name in ("documents", "bm25", "faiss"):
-            key = keys[name]
-            dest = paths[name]
+    # Download available artifacts; vector index is optional
+    ok = False
+    # Always try documents and bm25
+    for name in ("documents", "bm25"):
+        key = keys[name]
+        dest = paths[name]
+        try:
             s3.download_file(bucket, key, dest)
-        return True
+            ok = True
+        except Exception:
+            # If either is missing, keep going; we'll fall back to local build
+            pass
+
+    # Try vector index (FAISS) if present; ignore if missing
+    try:
+        s3.download_file(bucket, keys["faiss"], paths["faiss"])
+        ok = True
     except Exception:
-        return False
+        pass
+
+    return ok
 
 
 def try_upload_caches(rag) -> bool:
