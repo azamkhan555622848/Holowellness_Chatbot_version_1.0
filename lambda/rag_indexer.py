@@ -265,7 +265,6 @@ class RAGIndexer:
     def _process_single_pdf(self, pdf_path: str) -> List[Dict]:
         """Process single PDF and extract text using PyMuPDF, fallback to PDFMiner/PyPDF2"""
         import io
-        import fitz  # PyMuPDF
         from pdfminer.high_level import extract_text as pdfminer_extract_text
         import PyPDF2
         
@@ -277,63 +276,35 @@ class RAGIndexer:
                 pdf_bytes = file.read()
                 full_text = ""
 
-                # Quick sample gate with PyMuPDF + PDFMiner for page 0
+                # Sample-then-skip using PDFMiner first page
+                sample_has_text = False
                 try:
-                    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-                        n_pages = doc.page_count
-                        sample_pages = min(self.config.batch_size + 4, n_pages)  # small sample
-                        sample_has_text = False
-                        for i in range(sample_pages):
-                            try:
-                                ptxt = doc.load_page(i).get_text("text", sort=True) or ""
-                                if len(ptxt.strip()) >= self.config.min_text_chars:
-                                    sample_has_text = True
-                                    break
-                            except Exception:
-                                continue
-                except Exception as e:
-                    logger.warning(f"PyMuPDF open failed, will try PDFMiner sample: {e}")
-                    sample_has_text = False
-
-                if not sample_has_text:
-                    try:
-                        miner_sample = pdfminer_extract_text(io.BytesIO(pdf_bytes), page_numbers=[0]) or ""
-                        if len(miner_sample.strip()) >= self.config.min_text_chars:
-                            sample_has_text = True
-                    except Exception:
-                        pass
+                    miner_sample = pdfminer_extract_text(io.BytesIO(pdf_bytes), page_numbers=[0]) or ""
+                    if len(miner_sample.strip()) >= self.config.min_text_chars:
+                        sample_has_text = True
+                except Exception:
+                    pass
 
                 if not sample_has_text:
                     logger.warning(f"Insufficient text in sample. Skipping {pdf_path}")
                     return []
 
-                # Per-page extraction (PyMuPDF), keep only pages with enough text
+                # Full-doc with PDFMiner; if that fails, fallback to PyPDF2 per page
                 try:
-                    with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
-                        for page_num in range(doc.page_count):
-                            try:
-                                ptxt = doc.load_page(page_num).get_text("text", sort=True) or ""
-                                if len(ptxt.strip()) >= self.config.min_text_chars:
-                                    full_text += f"\n--- Page {page_num + 1} ---\n{ptxt}"
-                            except Exception as e:
-                                logger.warning(f"PyMuPDF failed on page {page_num+1}: {e}")
-                except Exception as e:
-                    logger.warning(f"PyMuPDF per-page failed, fallback to PDFMiner full: {e}")
+                    full_text = pdfminer_extract_text(io.BytesIO(pdf_bytes)) or ""
+                except Exception as e2:
+                    logger.warning(f"PDFMiner full-doc failed, fallback to PyPDF2: {e2}")
                     try:
-                        full_text = pdfminer_extract_text(io.BytesIO(pdf_bytes)) or ""
-                    except Exception as e2:
-                        logger.warning(f"PDFMiner full-doc failed, fallback to PyPDF2: {e2}")
-                        try:
-                            pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
-                            for page_num, page in enumerate(pdf_reader.pages):
-                                try:
-                                    page_text = page.extract_text()
-                                    if page_text and len(page_text.strip()) >= self.config.min_text_chars:
-                                        full_text += f"\n--- Page {page_num + 1} ---\n{page_text}"
-                                except Exception:
-                                    continue
-                        except Exception:
-                            pass
+                        pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
+                        for page_num, page in enumerate(pdf_reader.pages):
+                            try:
+                                page_text = page.extract_text()
+                                if page_text and len(page_text.strip()) >= self.config.min_text_chars:
+                                    full_text += f"\n--- Page {page_num + 1} ---\n{page_text}"
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
                 
                 text_stripped = full_text.strip()
                 if text_stripped:
