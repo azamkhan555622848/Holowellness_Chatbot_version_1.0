@@ -263,7 +263,10 @@ class RAGIndexer:
         return batch_result
         
     def _process_single_pdf(self, pdf_path: str) -> List[Dict]:
-        """Process single PDF and extract documents using PyPDF2"""
+        """Process single PDF and extract text using pdfminer.six, fallback to PyPDF2"""
+        # Primary: pdfminer.six (better for text extraction)
+        from pdfminer.high_level import extract_text
+        # Fallback: PyPDF2
         import PyPDF2
         
         documents = []
@@ -271,17 +274,26 @@ class RAGIndexer:
         
         try:
             with open(pdf_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                
-                # Extract text from all pages
+                # First try pdfminer.six (handles many encodings better)
+                try:
+                    miner_text = extract_text(pdf_path)
+                except Exception as e:
+                    logger.warning(f"pdfminer extract_text failed, will try PyPDF2: {e}")
+                    miner_text = ""
+
                 full_text = ""
-                for page_num, page in enumerate(pdf_reader.pages):
-                    try:
-                        page_text = page.extract_text()
-                        if page_text:
-                            full_text += f"\n--- Page {page_num + 1} ---\n{page_text}"
-                    except Exception as e:
-                        logger.warning(f"Failed to extract text from page {page_num + 1}: {e}")
+                if miner_text and miner_text.strip():
+                    full_text = miner_text
+                else:
+                    # Fallback to PyPDF2 per page
+                    pdf_reader = PyPDF2.PdfReader(file)
+                    for page_num, page in enumerate(pdf_reader.pages):
+                        try:
+                            page_text = page.extract_text()
+                            if page_text:
+                                full_text += f"\n--- Page {page_num + 1} ---\n{page_text}"
+                        except Exception as e:
+                            logger.warning(f"Failed to extract text from page {page_num + 1}: {e}")
                 
                 text_stripped = full_text.strip()
                 if text_stripped:

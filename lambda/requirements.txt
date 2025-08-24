@@ -1,14 +1,11 @@
 # Ultra-minimal Lambda requirements for 50MB limit
 # Use Lambda's built-in boto3/botocore instead of vendoring to avoid size/issues
 
-# Document processing (very lightweight)
+# Document processing
+# Prefer pdfminer.six for robust text extraction; keep PyPDF2 as fallback
+pdfminer.six>=20221105
+chardet>=5.0.0
 PyPDF2>=3.0.0
-
-# Only essential scientific computing (compatible manylinux2014 wheel for Python 3.9)
-numpy==1.26.4
-
-# Text processing only (much smaller than full scikit-learn)
-# We'll implement custom TF-IDF to avoid large sklearn package
 
 # Runtime typing helpers required by some libs on Python 3.9
 typing_extensions>=4.0.0
