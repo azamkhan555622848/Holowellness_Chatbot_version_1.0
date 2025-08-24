@@ -366,11 +366,10 @@ class RAGIndexer:
             return {}
         
         try:
-            # Import minimal dependencies
+            # Import minimal dependencies (avoid heavy native libs like numpy)
             import pickle
             import gzip
             import json
-            import numpy as np
             import math
             import re
             from collections import Counter, defaultdict
@@ -402,60 +401,50 @@ class RAGIndexer:
             
             logger.info(f"Built vocabulary: {vocab_size} terms")
             
-            # Calculate TF-IDF matrix
+            # Calculate TF-IDF as sparse vectors (pure Python, no numpy)
             num_docs = len(texts)
-            tfidf_matrix = np.zeros((num_docs, vocab_size))
             
             # Document frequency for IDF calculation
             df = defaultdict(int)
             for tokens in doc_tokens:
-                unique_tokens = set(tokens)
-                for token in unique_tokens:
+                for token in set(tokens):
                     df[token] += 1
             
-            # Build TF-IDF vectors
-            for doc_idx, tokens in enumerate(doc_tokens):
-                token_counts = Counter(tokens)
-                doc_length = len(tokens)
-                
-                if doc_length == 0:
+            # Precompute IDF with smoothing
+            idf_by_token = {}
+            for token in vocabulary:
+                idf_by_token[token] = math.log(num_docs / (1 + df[token]))
+            
+            # Build normalized sparse TF-IDF vectors for each document
+            sparse_tfidf_by_doc = []  # list[dict[token_idx, weight]]
+            for tokens in doc_tokens:
+                if not tokens:
+                    sparse_tfidf_by_doc.append({})
                     continue
-                    
-                for token, count in token_counts.items():
-                    if token in vocab_index:
-                        vocab_idx = vocab_index[token]
-                        
-                        # TF (with sublinear scaling)
-                        tf = 1 + math.log(count) if count > 0 else 0
-                        
-                        # IDF (with smoothing)
-                        idf = math.log(num_docs / (1 + df[token]))
-                        
-                        # TF-IDF
-                        tfidf_matrix[doc_idx, vocab_idx] = tf * idf
+                counts = Counter(tokens)
+                weights = {}
+                # compute squared norm
+                sum_sq = 0.0
+                for token, count in counts.items():
+                    if token not in vocab_index:
+                        continue
+                    tf = 1 + math.log(count) if count > 0 else 0.0
+                    idf = idf_by_token.get(token, 0.0)
+                    w = tf * idf
+                    if w == 0.0:
+                        continue
+                    idx = vocab_index[token]
+                    weights[idx] = w
+                    sum_sq += w * w
+                # L2 normalize
+                if sum_sq > 0:
+                    norm = math.sqrt(sum_sq)
+                    for idx in list(weights.keys()):
+                        weights[idx] = weights[idx] / norm
+                sparse_tfidf_by_doc.append(weights)
             
-            # L2 normalize the vectors
-            for i in range(num_docs):
-                norm = np.linalg.norm(tfidf_matrix[i])
-                if norm > 0:
-                    tfidf_matrix[i] /= norm
-            
-            # Create a simple semantic representation using top terms
-            logger.info("Building semantic embeddings...")
-            
-            # Use SVD for dimensionality reduction (manual implementation)
-            # For lightweight implementation, use numpy's SVD
-            U, S, Vt = np.linalg.svd(tfidf_matrix.T, full_matrices=False)
-            
-            # Keep top 128 dimensions for semantic similarity
-            n_components = min(128, min(tfidf_matrix.shape) - 1)
-            semantic_embeddings = tfidf_matrix @ U[:, :n_components]
-            
-            # Normalize semantic embeddings
-            for i in range(num_docs):
-                norm = np.linalg.norm(semantic_embeddings[i])
-                if norm > 0:
-                    semantic_embeddings[i] /= norm
+            # For compatibility, we still produce two artifacts, but both use the sparse TF-IDF
+            logger.info("Built sparse TF-IDF representations without numpy")
             
             # Define file paths (keeping same structure for compatibility)
             index_files = {
@@ -465,22 +454,26 @@ class RAGIndexer:
                 'manifest': os.path.join(self.temp_dir, 'manifest.json')
             }
             
-            # Save semantic vector index
+            # Save vector index (sparse TF-IDF)
             vector_data = {
-                'embeddings': semantic_embeddings,
+                'vectors': sparse_tfidf_by_doc,
                 'vocabulary': vocab_list,
-                'dimension': semantic_embeddings.shape[1],
-                'index_type': 'custom_semantic_tfidf'
+                'dimension': len(vocab_list),
+                'idf': idf_by_token,
+                'index_type': 'custom_tfidf_sparse',
+                'version': '1.0'
             }
             with open(index_files['vector_index'], 'wb') as f:
                 pickle.dump(vector_data, f)
             
-            # Save BM25-style index (using the same TF-IDF matrix)
+            # Save BM25-style index placeholder using same sparse TF-IDF
             bm25_data = {
-                'tfidf_matrix': tfidf_matrix,
+                'vectors': sparse_tfidf_by_doc,
                 'vocabulary': vocab_list,
                 'vocab_index': vocab_index,
-                'index_type': 'custom_bm25_tfidf'
+                'idf': idf_by_token,
+                'index_type': 'custom_bm25_tfidf_sparse',
+                'version': '1.0'
             }
             with open(index_files['bm25_index'], 'wb') as f:
                 pickle.dump(bm25_data, f)
@@ -492,9 +485,9 @@ class RAGIndexer:
             # Create manifest
             manifest = {
                 'documents_count': len(documents),
-                'embedding_dimension': semantic_embeddings.shape[1],
+                'embedding_dimension': len(vocab_list),
                 'vocabulary_size': vocab_size,
-                'model_name': 'custom_lightweight_tfidf',
+                'model_name': 'custom_lightweight_tfidf_sparse',
                 'created_at': time.time(),
                 'index_files': list(index_files.keys()),
                 'search_type': 'hybrid_custom_lightweight',
@@ -506,7 +499,7 @@ class RAGIndexer:
                 json.dump(manifest, f, indent=2)
             
             logger.info(f"Successfully built lightweight indexes: {len(documents)} documents, "
-                       f"{semantic_embeddings.shape[1]}D semantic + {vocab_size} vocabulary")
+                       f"vocab={vocab_size}, representation=sparse TF-IDF")
             return index_files
             
         except Exception as e:
