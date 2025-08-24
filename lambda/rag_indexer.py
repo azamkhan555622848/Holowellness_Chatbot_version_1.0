@@ -31,6 +31,7 @@ class IndexingConfig:
     max_processing_time: int = 840  # 14 minutes (leave 1 min buffer)
     batch_size: int = 3  # Process 3 PDFs at a time
     max_memory_mb: int = 2800  # Leave buffer for Lambda
+    min_text_chars: int = 300  # Skip PDFs with less than this many chars (assume OCR needed)
     
 @dataclass
 class IndexingResult:
@@ -264,7 +265,6 @@ class RAGIndexer:
     def _process_single_pdf(self, pdf_path: str) -> List[Dict]:
         """Process single PDF and extract documents using PyPDF2"""
         import PyPDF2
-        import re
         
         documents = []
         logger.info(f"Processing PDF: {pdf_path}")
@@ -283,9 +283,16 @@ class RAGIndexer:
                     except Exception as e:
                         logger.warning(f"Failed to extract text from page {page_num + 1}: {e}")
                 
-                if full_text.strip():
+                text_stripped = full_text.strip()
+                if text_stripped:
+                    if len(text_stripped) < self.config.min_text_chars:
+                        logger.warning(
+                            f"Insufficient text extracted (chars={len(text_stripped)} < {self.config.min_text_chars}). "
+                            f"Likely scanned/OCR-only. Skipping {pdf_path}"
+                        )
+                        return []
                     # Clean and chunk the text
-                    cleaned_text = self._clean_text(full_text)
+                    cleaned_text = self._clean_text(text_stripped)
                     chunks = self._chunk_text(cleaned_text, pdf_path)
                     documents.extend(chunks)
                     
@@ -547,7 +554,8 @@ def lambda_handler(event: Dict[str, Any], context) -> Dict[str, Any]:
             s3_pdfs_prefix=os.environ.get('S3_PDFS_PREFIX', 'rag_pdfs/'),
             s3_cache_prefix=os.environ.get('S3_CACHE_PREFIX', 'cache/current/'),
             batch_size=int(os.environ.get('BATCH_SIZE', '3')),
-            max_memory_mb=int(os.environ.get('MAX_MEMORY_MB', '2800'))
+            max_memory_mb=int(os.environ.get('MAX_MEMORY_MB', '2800')),
+            min_text_chars=int(os.environ.get('MIN_TEXT_CHARS', '300'))
         )
         
         # Initialize services

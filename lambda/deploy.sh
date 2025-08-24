@@ -36,7 +36,8 @@ if aws lambda get-function --function-name $FUNCTION_NAME --region $REGION >/dev
             S3_PDFS_PREFIX=rag_pdfs/,
             S3_CACHE_PREFIX=cache/current/,
             BATCH_SIZE=1,
-            MAX_MEMORY_MB=2800
+            MAX_MEMORY_MB=2800,
+            MIN_TEXT_CHARS=300
         }" \
         --region $REGION
         
@@ -137,7 +138,8 @@ EOF
             S3_PDFS_PREFIX=rag_pdfs/,
             S3_CACHE_PREFIX=cache/current/,
             BATCH_SIZE=1,
-            MAX_MEMORY_MB=2800
+            MAX_MEMORY_MB=2800,
+            MIN_TEXT_CHARS=300
         }" \
         --tracing-config Mode=Active \
         --region $REGION
