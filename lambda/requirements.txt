@@ -6,6 +6,7 @@
 pdfminer.six>=20221105
 chardet>=5.0.0
 PyPDF2>=3.0.0
+PyMuPDF==1.24.*
 
 # Runtime typing helpers required by some libs on Python 3.9
 typing_extensions>=4.0.0
