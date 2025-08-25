@@ -344,7 +344,7 @@ class RAGSystem:
             print(f"Translation error: {e}")
             return f"翻譯錯誤：{english_content}"  # Fallback: return original with error note
 
-    def generate_answer(self, query: str, conversation_history: List[Dict[str, str]] = None, override_context: str = None, override_thinking: str = None) -> Dict[str, str]:
+    def generate_answer(self, query: str, conversation_history: List[Dict[str, str]] = None, override_context: str = None, override_thinking: str = None, translate: bool = True) -> Dict[str, str]:
         """
         Generates an answer using two-step pipeline: 
         1. deepseek-r1 for medical content generation (English)
@@ -460,20 +460,23 @@ NOW RESPOND: Use the same professional, natural approach with the exact structur
                 print(f"English Response: {english_content}")
                 internal_thinking += f"\nEnglish Response: {english_content}"
             
-            # Step 2: Translate to Traditional Chinese
-            print("\n--- Step 2: Translating to Traditional Chinese ---")
-            translated_content = self._translate_to_traditional_chinese(english_content)
-            internal_thinking += f"\nTranslated Content: {translated_content}"
+            # Step 2: Optional translation to Traditional Chinese
+            if translate:
+                print("\n--- Step 2: Translating to Traditional Chinese ---")
+                translated_content = self._translate_to_traditional_chinese(english_content)
+                internal_thinking += f"\nTranslated Content: {translated_content}"
+            else:
+                translated_content = english_content
 
         except FutureTimeoutError as e:
             error_message = f"Model timeout: {e}"
             print(error_message)
-            translated_content = f"抱歉，AI模型回應時間過長，請稍後重試。"
+            translated_content = f"抱歉，AI模型回應時間過長，請稍後重試。" if translate else "Sorry, the AI model timed out. Please try again shortly."
             internal_thinking += f"\nTimeout Error: {e}"
         except Exception as e:
             error_message = f"Error communicating with Ollama: {e}"
             print(error_message)
-            translated_content = f"抱歉，我在連接AI模型時遇到錯誤：{e}"
+            translated_content = f"抱歉，我在連接AI模型時遇到錯誤：{e}" if translate else f"Sorry, I encountered an error communicating with the AI model: {e}"
             internal_thinking += f"\nOllama Error: {e}"
         
         print("--- Two-Step Pipeline Complete ---\n")

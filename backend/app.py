@@ -278,6 +278,9 @@ def chat():
         query = data.get('query') or data.get('message', '').strip()
         user_id = data.get('user_id')
         session_id = data.get('session_id')
+        # Per-request translation toggle (default True)
+        translate_flag = data.get('translate')
+        translate = True if translate_flag is None else bool(translate_flag)
 
         if not query:
             return jsonify({'error': 'Field "query" or "message" is required'}), 400
@@ -351,7 +354,7 @@ def chat():
                     "If followup_mode=true, interpret the user's message as an answer to your prior question and move to the next most relevant diagnostic step."
                 )
                 augmented_history = [{"role": "system", "content": routing_hint}] + conversation_history
-                future = executor.submit(rag.generate_answer, query, augmented_history)
+                future = executor.submit(rag.generate_answer, query, augmented_history, None, None, translate)
                 try:
                     response_data = future.result(timeout=rag_timeout_s)
                 except concurrent.futures.TimeoutError:
